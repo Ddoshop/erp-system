@@ -594,7 +594,6 @@ const TENDER_STATUSES = [
 
 async function renderTenders(user) {
   const root = document.getElementById("pageRoot");
-  const { items } = await api("/api/tenders");
   const canEdit = user.role === "manager" || user.role === "admin";
   const isSupplier = user.role === "supplier";
   const isPicker = user.role === "picker";
@@ -607,55 +606,270 @@ async function renderTenders(user) {
         <div><h3>Реестр тендеров</h3></div>
         ${canEdit ? '<button id="addTenderBtn" class="btn-primary" type="button">+ Тендер</button>' : ""}
       </div>
+      <div class="filter-bar">
+        <input id="filterSearch" type="search" placeholder="Поиск по номеру, лоту, клиенту..." class="filter-input">
+        <select id="filterStatus" class="filter-select">
+          <option value="">Все статусы площадки</option>
+          <option value="open">Прием заявок</option>
+          <option value="review">На рассмотрении</option>
+          <option value="draft">Черновик</option>
+          <option value="commission">Работа комиссии</option>
+          <option value="awaiting_signing">Ожидание подписания</option>
+          <option value="signed">Подписан</option>
+          <option value="closed">Закрыт</option>
+        </select>
+        <select id="filterInternalStatus" class="filter-select">
+          <option value="">Все внутр. статусы</option>
+          <option value="awaiting_picking">Ожидает подбора</option>
+          <option value="awaiting_application">Ожидает подачи заявки</option>
+          <option value="submitted">Заявка подана</option>
+          <option value="won_waiting_sign">Выиграли</option>
+          <option value="signed_ours">Подписан с нашей стороны</option>
+          <option value="signed_both">Подписан с двух сторон</option>
+          <option value="executed">Исполнен</option>
+          <option value="archived_lost">Проиграли (архив)</option>
+        </select>
+        <label class="filter-archive-toggle">
+          <input id="filterArchived" type="checkbox"> Показать архивные
+        </label>
+      </div>
       <table class="table">
         <thead><tr><th>Номер</th><th>Лот</th><th>Клиент</th><th>НМЦК</th><th>Срок</th><th>Статус площадки</th><th>Внутр. статус</th><th>Действия</th></tr></thead>
-        <tbody>
-          ${items.map((t) => `<tr>
-            <td><a data-entity-type="tender" data-entity-id="${t.id}">${t.number}</a></td>
-            <td>${t.lot}</td>
-            <td><a data-entity-type="client" data-entity-id="${t.client}">${t.client}</a></td>
-            <td>${formatMoney(t.price)}</td><td>${formatDate(t.deadline)}</td><td>${statusBadge(t.status)}</td><td>${internalStatusBadge(t.internal_status)}</td>
-            <td>
-              <div class="row-actions">
-                <button data-details="${t.id}" type="button">Детали</button>
-                ${canEdit ? `
-                  <button data-edit="${t.id}" type="button">Изменить</button>` : ""}
-                ${(canEdit && !String(t.source_url || "").trim() && t.status === "draft") ? `<button data-quotes="${t.id}" type="button">КП / НМЦК</button>` : ""}
-                ${isAdmin ? `<button data-del="${t.id}" type="button" class="btn-danger-outline">Удалить</button>` : ""}
-                ${isSupplier ? `<button data-apply="${t.id}" type="button">Подать заявку</button>` : ""}
-                ${isPicker ? `<button data-items="${t.id}" type="button">Подбор товаров</button>` : ""}
-                ${(isManager && t.internal_status === "awaiting_application") ? `<button data-submitpkg="${t.id}" type="button">Подача заявки</button>` : ""}
-                ${(canEdit && t.status === "commission") ? `<button data-commission="${t.id}" type="button">Сменить статус</button>` : ""}
-                ${(isManager && ["won_waiting_sign", "signed_ours"].includes(String(t.internal_status || ""))) ? `<button data-contractsign="${t.id}" type="button">Подписание договора</button>` : ""}
-              </div>
-            </td>
-          </tr>
-          <tr id="details-row-${t.id}" style="display:none"><td colspan="8"><div id="details-panel-${t.id}" class="quotes-panel"></div></td></tr>
-          <tr id="quotes-row-${t.id}" style="display:none"><td colspan="8"><div id="quotes-panel-${t.id}" class="quotes-panel"></div></td></tr>
-          <tr id="items-row-${t.id}" style="display:none"><td colspan="8"><div id="items-panel-${t.id}" class="quotes-panel"></div></td></tr>
-          <tr id="submitpkg-row-${t.id}" style="display:none"><td colspan="8"><div id="submitpkg-panel-${t.id}" class="quotes-panel"></div></td></tr>`).join("")}
-        </tbody>
+        <tbody id="tendersTableBody"><tr><td colspan="8" class="muted" style="text-align:center">Загрузка...</td></tr></tbody>
       </table>
     </div>
   `;
 
-  root.querySelectorAll("[data-details]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const tid = btn.dataset.details;
-      const row = document.getElementById(`details-row-${tid}`);
-      const panel = document.getElementById(`details-panel-${tid}`);
-      const tender = items.find((x) => String(x.id) === String(tid));
-      if (row.style.display !== "none") {
-        row.style.display = "none";
-        return;
-      }
-      row.style.display = "";
-      await renderTenderDetailsPanel(panel, tender);
+  let items = [];
+  let filterTimer;
+
+  async function loadTable() {
+    const search = (document.getElementById("filterSearch")?.value || "").trim();
+    const status = document.getElementById("filterStatus")?.value || "";
+    const internalStatus = document.getElementById("filterInternalStatus")?.value || "";
+    const archived = document.getElementById("filterArchived")?.checked ? "1" : "0";
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (status) params.set("status", status);
+    if (internalStatus) params.set("internal_status", internalStatus);
+    params.set("archived", archived);
+
+    const tbody = document.getElementById("tendersTableBody");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center">Загрузка...</td></tr>`;
+
+    try {
+      const data = await api(`/api/tenders?${params}`);
+      items = data.items || [];
+    } catch (e) {
+      items = [];
+    }
+
+    const tbody2 = document.getElementById("tendersTableBody");
+    if (!tbody2) return;
+
+    if (items.length === 0) {
+      tbody2.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center">Ничего не найдено</td></tr>`;
+      return;
+    }
+
+    tbody2.innerHTML = items.map((t) => `<tr>
+      <td><a data-entity-type="tender" data-entity-id="${t.id}">${t.number}</a></td>
+      <td>${t.lot}</td>
+      <td><a data-entity-type="client" data-entity-id="${t.client}">${t.client}</a></td>
+      <td>${formatMoney(t.price)}</td><td>${formatDate(t.deadline)}</td><td>${statusBadge(t.status)}</td><td>${internalStatusBadge(t.internal_status)}</td>
+      <td>
+        <div class="row-actions">
+          <button data-details="${t.id}" type="button">Детали</button>
+          ${canEdit ? `<button data-edit="${t.id}" type="button">Изменить</button>` : ""}
+          ${(canEdit && !String(t.source_url || "").trim() && t.status === "draft") ? `<button data-quotes="${t.id}" type="button">КП / НМЦК</button>` : ""}
+          ${isAdmin ? `<button data-del="${t.id}" type="button" class="btn-danger-outline">Удалить</button>` : ""}
+          ${isSupplier ? `<button data-apply="${t.id}" type="button">Подать заявку</button>` : ""}
+          ${isPicker ? `<button data-items="${t.id}" type="button">Подбор товаров</button>` : ""}
+          ${(isManager && t.internal_status === "awaiting_application") ? `<button data-submitpkg="${t.id}" type="button">Подача заявки</button>` : ""}
+          ${(canEdit && t.status === "commission") ? `<button data-commission="${t.id}" type="button">Сменить статус</button>` : ""}
+          ${(isManager && ["won_waiting_sign", "signed_ours"].includes(String(t.internal_status || ""))) ? `<button data-contractsign="${t.id}" type="button">Подписание договора</button>` : ""}
+        </div>
+      </td>
+    </tr>
+    <tr id="details-row-${t.id}" style="display:none"><td colspan="8"><div id="details-panel-${t.id}" class="quotes-panel"></div></td></tr>
+    <tr id="quotes-row-${t.id}" style="display:none"><td colspan="8"><div id="quotes-panel-${t.id}" class="quotes-panel"></div></td></tr>
+    <tr id="items-row-${t.id}" style="display:none"><td colspan="8"><div id="items-panel-${t.id}" class="quotes-panel"></div></td></tr>
+    <tr id="submitpkg-row-${t.id}" style="display:none"><td colspan="8"><div id="submitpkg-panel-${t.id}" class="quotes-panel"></div></td></tr>`).join("");
+
+    bindTableListeners();
+  }
+
+  function bindTableListeners() {
+    const tbody = document.getElementById("tendersTableBody");
+    if (!tbody) return;
+
+    tbody.querySelectorAll("[data-details]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const tid = btn.dataset.details;
+        const row = document.getElementById(`details-row-${tid}`);
+        const panel = document.getElementById(`details-panel-${tid}`);
+        const tender = items.find((x) => String(x.id) === String(tid));
+        if (row.style.display !== "none") { row.style.display = "none"; return; }
+        row.style.display = "";
+        await renderTenderDetailsPanel(panel, tender);
+      });
     });
+
+    if (canEdit) {
+      tbody.querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const row = items.find((x) => String(x.id) === String(btn.dataset.edit));
+          const data = await showForm("Редактировать тендер", [
+            { name: "number",   label: "Номер закупки",         value: row.number,   required: true },
+            { name: "lot",      label: "Лот / Предмет закупки", value: row.lot },
+            { name: "client",   label: "Заказчик",              value: row.client },
+            { name: "price",    label: "НМЦК (руб.)",           type: "number", value: row.price },
+            { name: "deadline", label: "Срок подачи заявок",    type: "date",   value: row.deadline },
+            { name: "status",   label: "Статус",                type: "select", options: TENDER_STATUSES, value: row.status },
+          ]);
+          if (!data) return;
+          try {
+            await api(`/api/tenders/${row.id}`, "PUT", { ...data, price: Number(data.price) });
+            toast("Тендер обновлён");
+            loadTable();
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+
+      tbody.querySelectorAll("[data-del]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!await confirmModal("Удалить тендер? Все связанные данные также будут удалены.")) return;
+          await api(`/api/tenders/${btn.dataset.del}`, "DELETE");
+          toast("Тендер удалён");
+          loadTable();
+        });
+      });
+
+      tbody.querySelectorAll("[data-quotes]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tid = btn.dataset.quotes;
+          const row = document.getElementById(`quotes-row-${tid}`);
+          const panel = document.getElementById(`quotes-panel-${tid}`);
+          if (row.style.display !== "none") { row.style.display = "none"; return; }
+          row.style.display = "";
+          await renderQuotesPanel(panel, tid, user);
+        });
+      });
+
+      tbody.querySelectorAll("[data-commission]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tid = btn.dataset.commission;
+          const tender = items.find((x) => String(x.id) === String(tid));
+          const form = await showForm("Решение комиссии", [
+            {
+              name: "decision",
+              label: "Результат",
+              type: "select",
+              value: "won",
+              options: [
+                { value: "won", label: "Выиграли" },
+                { value: "lost", label: "Проиграли" },
+              ],
+            },
+          ]);
+          if (!form) return;
+          try {
+            await api(`/api/tenders/${tender.id}/commission-decision`, "PUT", { decision: form.decision });
+            toast(form.decision === "lost" ? "Тендер проигран и перенесен в архив" : "Тендер выигран: статус площадки -> Ожидание подписания");
+            loadTable();
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+    }
+
+    if (isPicker) {
+      tbody.querySelectorAll("[data-items]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tid = btn.dataset.items;
+          const row = document.getElementById(`items-row-${tid}`);
+          const panel = document.getElementById(`items-panel-${tid}`);
+          const tender = items.find((x) => String(x.id) === String(tid));
+          if (row.style.display !== "none") { row.style.display = "none"; return; }
+          row.style.display = "";
+          await renderTenderItemsPanel(panel, tender, user);
+        });
+      });
+    }
+
+    if (isManager) {
+      tbody.querySelectorAll("[data-submitpkg]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tid = btn.dataset.submitpkg;
+          const row = document.getElementById(`submitpkg-row-${tid}`);
+          const panel = document.getElementById(`submitpkg-panel-${tid}`);
+          const tender = items.find((x) => String(x.id) === String(tid));
+          if (row.style.display !== "none") { row.style.display = "none"; return; }
+          row.style.display = "";
+          await renderSubmissionPackagePanel(panel, tender);
+        });
+      });
+
+      tbody.querySelectorAll("[data-contractsign]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tid = btn.dataset.contractsign;
+          const tender = items.find((x) => String(x.id) === String(tid));
+          const isFirstStep = String(tender.internal_status || "") === "won_waiting_sign";
+          const form = await showForm("Подписание договора", [
+            {
+              name: "stage",
+              label: "Следующий внутренний статус",
+              type: "select",
+              value: isFirstStep ? "signed_ours" : "signed_both",
+              options: isFirstStep
+                ? [{ value: "signed_ours", label: "Подписан с нашей стороны" }]
+                : [{ value: "signed_both", label: "Подписан с двух сторон" }],
+            },
+          ]);
+          if (!form) return;
+          try {
+            await api(`/api/tenders/${tender.id}/contract-sign`, "PUT", { stage: form.stage });
+            toast(form.stage === "signed_both" ? "Договор подписан с двух сторон, статус площадки -> Подписан" : "Договор подписан с нашей стороны");
+            loadTable();
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+    }
+
+    if (isSupplier) {
+      tbody.querySelectorAll("[data-apply]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const tenderId = btn.dataset.apply;
+          const data = await showForm("Подать заявку на участие", [
+            { name: "price",         label: "Ваша цена (руб.)",      type: "number", required: true },
+            { name: "delivery_days", label: "Срок поставки (дней)",  type: "number", value: "14" },
+            { name: "note",          label: "Комментарий",           type: "textarea", placeholder: "Необязательно" },
+          ]);
+          if (!data) return;
+          try {
+            await api("/api/applications", "POST", {
+              tender_id: Number(tenderId),
+              price: Number(data.price),
+              delivery_days: Number(data.delivery_days || 14),
+              note: data.note || "",
+            });
+            toast("Заявка подана");
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+    }
+  }
+
+  // Bind filter events (once on shell elements)
+  document.getElementById("filterSearch")?.addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadTable, 300);
   });
+  document.getElementById("filterStatus")?.addEventListener("change", loadTable);
+  document.getElementById("filterInternalStatus")?.addEventListener("change", loadTable);
+  document.getElementById("filterArchived")?.addEventListener("change", loadTable);
 
   if (canEdit) {
-    document.getElementById("addTenderBtn").addEventListener("click", async () => {
+    document.getElementById("addTenderBtn")?.addEventListener("click", async () => {
       const mode = await showForm("Добавить тендер", [
         {
           name: "mode",
@@ -683,7 +897,7 @@ async function renderTenders(user) {
           if (!data) return;
           await api("/api/tenders", "POST", { ...data, price: Number(data.price) });
           toast("Тендер добавлен");
-          renderTenders(user);
+          loadTable();
           return;
         }
 
@@ -697,7 +911,6 @@ async function renderTenders(user) {
         const extractedId = (rawTenderInput.match(/noticeInfoId=(\d+)/i)?.[1]
           || rawTenderInput.match(/(\d{6,})/)?.[1]
           || "").trim();
-        // Only pass url if it's an actual URL, not a raw numeric ID
         const resolvedUrl = (source.url || (rawTenderInput.startsWith("http") ? rawTenderInput : "")).trim();
 
         const parsedResp = await api("/api/tenders/parse-url", "POST", {
@@ -736,168 +949,14 @@ async function renderTenders(user) {
           price: Number(reviewed.price || 0),
         });
         toast("Тендер импортирован");
-        renderTenders(user);
+        loadTable();
       } catch (e) {
         toast(e.message, "error");
       }
     });
-
-    root.querySelectorAll("[data-edit]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const row = items.find((x) => String(x.id) === String(btn.dataset.edit));
-        const data = await showForm("Редактировать тендер", [
-          { name: "number",   label: "Номер закупки",         value: row.number,   required: true },
-          { name: "lot",      label: "Лот / Предмет закупки", value: row.lot },
-          { name: "client",   label: "Заказчик",              value: row.client },
-          { name: "price",    label: "НМЦК (руб.)",           type: "number", value: row.price },
-          { name: "deadline", label: "Срок подачи заявок",    type: "date",   value: row.deadline },
-          { name: "status",   label: "Статус",                type: "select", options: TENDER_STATUSES, value: row.status },
-        ]);
-        if (!data) return;
-        try {
-          await api(`/api/tenders/${row.id}`, "PUT", { ...data, price: Number(data.price) });
-          toast("Тендер обновлён");
-          renderTenders(user);
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
-
-    root.querySelectorAll("[data-del]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        if (!await confirmModal("Удалить тендер? Все связанные данные также будут удалены.")) return;
-        await api(`/api/tenders/${btn.dataset.del}`, "DELETE");
-        toast("Тендер удалён");
-        renderTenders(user);
-      });
-    });
-
-    root.querySelectorAll("[data-quotes]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tid = btn.dataset.quotes;
-        const row = document.getElementById(`quotes-row-${tid}`);
-        const panel = document.getElementById(`quotes-panel-${tid}`);
-        if (row.style.display !== "none") { row.style.display = "none"; return; }
-        row.style.display = "";
-        await renderQuotesPanel(panel, tid, user);
-      });
-    });
-
   }
 
-  if (isPicker) {
-    root.querySelectorAll("[data-items]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tid = btn.dataset.items;
-        const row = document.getElementById(`items-row-${tid}`);
-        const panel = document.getElementById(`items-panel-${tid}`);
-        const tender = items.find((x) => String(x.id) === String(tid));
-        if (row.style.display !== "none") { row.style.display = "none"; return; }
-        row.style.display = "";
-        await renderTenderItemsPanel(panel, tender, user);
-      });
-    });
-  }
-
-  if (isManager) {
-    root.querySelectorAll("[data-submitpkg]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tid = btn.dataset.submitpkg;
-        const row = document.getElementById(`submitpkg-row-${tid}`);
-        const panel = document.getElementById(`submitpkg-panel-${tid}`);
-        const tender = items.find((x) => String(x.id) === String(tid));
-        if (row.style.display !== "none") { row.style.display = "none"; return; }
-        row.style.display = "";
-        await renderSubmissionPackagePanel(panel, tender);
-      });
-    });
-  }
-
-  if (isManager) {
-    root.querySelectorAll("[data-contractsign]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tid = btn.dataset.contractsign;
-        const tender = items.find((x) => String(x.id) === String(tid));
-        const isFirstStep = String(tender.internal_status || "") === "won_waiting_sign";
-        const form = await showForm("Подписание договора", [
-          {
-            name: "stage",
-            label: "Следующий внутренний статус",
-            type: "select",
-            value: isFirstStep ? "signed_ours" : "signed_both",
-            options: isFirstStep
-              ? [{ value: "signed_ours", label: "Подписан с нашей стороны" }]
-              : [{ value: "signed_both", label: "Подписан с двух сторон" }],
-          },
-        ]);
-        if (!form) return;
-
-        try {
-          await api(`/api/tenders/${tender.id}/contract-sign`, "PUT", { stage: form.stage });
-          if (form.stage === "signed_both") {
-            toast("Договор подписан с двух сторон, статус площадки -> Подписан");
-          } else {
-            toast("Договор подписан с нашей стороны");
-          }
-          renderTenders(user);
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
-  }
-
-  if (canEdit) {
-    root.querySelectorAll("[data-commission]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tid = btn.dataset.commission;
-        const tender = items.find((x) => String(x.id) === String(tid));
-        const form = await showForm("Решение комиссии", [
-          {
-            name: "decision",
-            label: "Результат",
-            type: "select",
-            value: "won",
-            options: [
-              { value: "won", label: "Выиграли" },
-              { value: "lost", label: "Проиграли" },
-            ],
-          },
-        ]);
-        if (!form) return;
-
-        try {
-          const resp = await api(`/api/tenders/${tender.id}/commission-decision`, "PUT", { decision: form.decision });
-          if (form.decision === "lost") {
-            toast("Тендер проигран и перенесен в архив");
-          } else {
-            toast("Тендер выигран: статус площадки -> Ожидание подписания");
-          }
-          renderTenders(user);
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
-  }
-
-  if (isSupplier) {
-    root.querySelectorAll("[data-apply]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const tenderId = btn.dataset.apply;
-        const data = await showForm("Подать заявку на участие", [
-          { name: "price",         label: "Ваша цена (руб.)",      type: "number", required: true },
-          { name: "delivery_days", label: "Срок поставки (дней)",  type: "number", value: "14" },
-          { name: "note",          label: "Комментарий",           type: "textarea", placeholder: "Необязательно" },
-        ]);
-        if (!data) return;
-        try {
-          await api("/api/applications", "POST", {
-            tender_id: Number(tenderId),
-            price: Number(data.price),
-            delivery_days: Number(data.delivery_days || 14),
-            note: data.note || "",
-          });
-          toast("Заявка подана");
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
-  }
+  await loadTable();
 }
 
 async function renderTenderDetailsPanel(panel, tender) {
@@ -1275,7 +1334,6 @@ async function renderQuotesPanel(panel, tenderId, user) {
 
 async function renderOrders(user) {
   const root = document.getElementById("pageRoot");
-  const { items } = await api("/api/orders");
   const canEdit = user.role === "manager" || user.role === "admin";
   const canCreate = user.role === "picker" || user.role === "admin";
   let eligible = [];
@@ -1283,7 +1341,7 @@ async function renderOrders(user) {
     eligible = (await api("/api/orders/eligible-tenders").catch(() => ({ items: [] }))).items || [];
   }
 
-  const statuses = {
+  const orderStatuses = {
     draft: "Черновик",
     open: "В работе",
     review: "На согласовании",
@@ -1324,26 +1382,107 @@ async function renderOrders(user) {
   root.innerHTML = `
     ${tenderCards}
     <div class="card">
-      <h3>Заказы</h3>
+      <div class="top">
+        <h3>Заказы</h3>
+      </div>
+      <div class="filter-bar">
+        <input id="filterSearch" type="search" placeholder="Поиск по номеру, тендеру, клиенту..." class="filter-input">
+        <select id="filterStatus" class="filter-select">
+          <option value="">Все статусы</option>
+          <option value="draft">Черновик</option>
+          <option value="open">В работе</option>
+          <option value="review">На согласовании</option>
+          <option value="awaiting_payment">Ожидает оплаты</option>
+          <option value="paid">Оплачен</option>
+          <option value="stocked">Поставлен на склад</option>
+          <option value="closed">Закрыт</option>
+        </select>
+        <label class="filter-archive-toggle">
+          <input id="filterArchived" type="checkbox"> Показать архивные (склад / закрытые)
+        </label>
+      </div>
       <table class="table">
         <thead><tr><th>ID</th><th>Номер заказа</th><th>Тендер</th><th>Клиент</th><th>Счет</th><th>Поставка к нам</th><th>Сумма</th><th>Позиции</th><th>Статус</th><th>Действие</th></tr></thead>
-        <tbody>
-          ${items.map((o) => `<tr>
-            <td>${o.id}</td>
-            <td><a data-entity-type="order" data-entity-id="${o.id}">${esc(o.order_number || "—")}</a></td>
-            <td><a data-entity-type="tender" data-entity-id="${o.tender_id}">${esc(o.tender_number || "—")}</a></td>
-            <td><a data-entity-type="client" data-entity-id="${o.client}">${esc(o.client || "—")}</a></td>
-            <td>${o.invoice_number ? `${esc(o.invoice_number)}<div class="muted">${statusBadge(o.invoice_status || "unpaid")}</div>` : "—"}</td>
-            <td>${formatDate(o.supply_date)}</td>
-            <td>${formatMoney(o.amount)}</td>
-            <td>${(o.items || []).map((it) => `${esc(it.name)} (${it.quantity} ${esc(it.unit || "шт")})`).join("; ") || "—"}</td>
-            <td><span class="status ${o.status}">${statuses[o.status] || o.status}</span></td>
-            <td>${canEdit ? `<button data-cycle="${o.id}" type="button">Сменить статус</button>` : (user.role === "picker" && o.status === "paid" ? `<button data-stocked="${o.id}" class="btn-primary" type="button">Поставлен на склад</button>` : "—")}</td>
-          </tr>`).join("")}
-        </tbody>
+        <tbody id="ordersTableBody"><tr><td colspan="10" class="muted" style="text-align:center">Загрузка...</td></tr></tbody>
       </table>
     </div>
   `;
+
+  let items = [];
+  let filterTimer;
+
+  async function loadTable() {
+    const search = (document.getElementById("filterSearch")?.value || "").trim();
+    const status = document.getElementById("filterStatus")?.value || "";
+    const archived = document.getElementById("filterArchived")?.checked ? "1" : "0";
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (status) params.set("status", status);
+    params.set("archived", archived);
+
+    const tbody = document.getElementById("ordersTableBody");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="muted" style="text-align:center">Загрузка...</td></tr>`;
+
+    try {
+      const data = await api(`/api/orders?${params}`);
+      items = data.items || [];
+    } catch (e) {
+      items = [];
+    }
+
+    const tbody2 = document.getElementById("ordersTableBody");
+    if (!tbody2) return;
+
+    if (items.length === 0) {
+      tbody2.innerHTML = `<tr><td colspan="10" class="muted" style="text-align:center">Ничего не найдено</td></tr>`;
+      return;
+    }
+
+    tbody2.innerHTML = items.map((o) => `<tr>
+      <td>${o.id}</td>
+      <td><a data-entity-type="order" data-entity-id="${o.id}">${esc(o.order_number || "—")}</a></td>
+      <td><a data-entity-type="tender" data-entity-id="${o.tender_id}">${esc(o.tender_number || "—")}</a></td>
+      <td><a data-entity-type="client" data-entity-id="${o.client}">${esc(o.client || "—")}</a></td>
+      <td>${o.invoice_number ? `${esc(o.invoice_number)}<div class="muted">${statusBadge(o.invoice_status || "unpaid")}</div>` : "—"}</td>
+      <td>${formatDate(o.supply_date)}</td>
+      <td>${formatMoney(o.amount)}</td>
+      <td>${(o.items || []).map((it) => `${esc(it.name)} (${it.quantity} ${esc(it.unit || "шт")})`).join("; ") || "—"}</td>
+      <td><span class="status ${o.status}">${orderStatuses[o.status] || o.status}</span></td>
+      <td>${canEdit ? `<button data-cycle="${o.id}" type="button">Сменить статус</button>` : (user.role === "picker" && o.status === "paid" ? `<button data-stocked="${o.id}" class="btn-primary" type="button">Поставлен на склад</button>` : "—")}</td>
+    </tr>`).join("");
+
+    bindTableListeners();
+  }
+
+  function bindTableListeners() {
+    const tbody = document.getElementById("ordersTableBody");
+    if (!tbody) return;
+
+    if (canEdit) {
+      tbody.querySelectorAll("[data-cycle]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const statuses = ["awaiting_payment", "paid", "open", "review", "closed"];
+          const row = items.find((x) => String(x.id) === String(btn.dataset.cycle));
+          const next = statuses[(statuses.indexOf(row.status) + 1) % statuses.length];
+          await api(`/api/orders/${row.id}/status`, "PUT", { status: next });
+          toast("Статус обновлён");
+          loadTable();
+        });
+      });
+    }
+
+    if (user.role === "picker") {
+      tbody.querySelectorAll("[data-stocked]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await api(`/api/orders/${btn.dataset.stocked}/status`, "PUT", { status: "stocked" });
+            toast("Заказ переведен в статус 'Поставлен на склад'");
+            loadTable();
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+    }
+  }
 
   if (canCreate) {
     root.querySelectorAll("[data-create-order]").forEach((btn) => {
@@ -1473,99 +1612,142 @@ async function renderOrders(user) {
             });
             closeModal();
             toast("Заказ создан");
-            renderOrders(user);
+            loadTable();
           } catch (e) { toast(e.message, "error"); }
         });
       });
     });
   }
 
-  if (canEdit) {
-    root.querySelectorAll("[data-cycle]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const statuses = ["awaiting_payment", "paid", "open", "review", "closed"];
-        const row = items.find((x) => String(x.id) === String(btn.dataset.cycle));
-        const next = statuses[(statuses.indexOf(row.status) + 1) % statuses.length];
-        await api(`/api/orders/${row.id}/status`, "PUT", { status: next });
-        toast("Статус обновлён");
-        renderOrders(user);
-      });
-    });
-  }
+  document.getElementById("filterSearch")?.addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadTable, 300);
+  });
+  document.getElementById("filterStatus")?.addEventListener("change", loadTable);
+  document.getElementById("filterArchived")?.addEventListener("change", loadTable);
 
-  if (user.role === "picker") {
-    root.querySelectorAll("[data-stocked]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        try {
-          await api(`/api/orders/${btn.dataset.stocked}/status`, "PUT", { status: "stocked" });
-          toast("Заказ переведен в статус 'Поставлен на склад'");
-          renderOrders(user);
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
-  }
+  await loadTable();
 }
 
 async function renderDeliveries(user) {
   const root = document.getElementById("pageRoot");
-  const { items } = await api("/api/shipments");
   const canLogistic = ["logistic", "admin"].includes(user.role);
 
   root.innerHTML = `
     <div class="card">
-      <h3>Поставки</h3>
+      <div class="top">
+        <h3>Поставки</h3>
+      </div>
+      <div class="filter-bar">
+        <input id="filterSearch" type="search" placeholder="Поиск по заказу, тендеру, клиенту..." class="filter-input">
+        <select id="filterStatus" class="filter-select">
+          <option value="">Все статусы</option>
+          <option value="warehouse">На складе</option>
+          <option value="scheduled">Назначено на дату отгрузки</option>
+          <option value="shipped">Отгружено</option>
+          <option value="received">Получено клиентом</option>
+          <option value="closed">Закрыто</option>
+        </select>
+        <label class="filter-archive-toggle">
+          <input id="filterArchived" type="checkbox"> Показать закрытые
+        </label>
+      </div>
       <table class="table">
         <thead><tr><th>Заказ</th><th>Тендер</th><th>Клиент</th><th>Лот</th><th>Дата отгрузки</th><th>Статус</th><th>Действия</th></tr></thead>
-        <tbody>
-          ${items.map((s) => {
-            const action = !canLogistic
-              ? "—"
-              : !s.transfer_ready
-                ? "<span class=\"muted\">Ожидает передачи от бухгалтера</span>"
-                : s.status === "warehouse"
-                  ? `<button data-ship-status=\"${s.id}\" data-next=\"scheduled\" type=\"button\">Назначить дату</button>`
-                  : s.status === "scheduled"
-                    ? `<button data-ship-status=\"${s.id}\" data-next=\"shipped\" type=\"button\">Отгружено</button>`
-                    : s.status === "shipped"
-                      ? `<button data-ship-status=\"${s.id}\" data-next=\"received\" type=\"button\">Получено клиентом</button>`
-                      : "—";
-
-            return `<tr>
-              <td><a data-entity-type="order" data-entity-id="${s.order_id}">${esc(s.order_number || "—")}</a></td>
-              <td><a data-entity-type="tender" data-entity-id="${s.tender_id}">${esc(s.tender_number || "—")}</a></td>
-              <td><a data-entity-type="client" data-entity-id="${s.client}">${esc(s.client || "—")}</a></td>
-              <td>${esc(s.lot || "—")}</td>
-              <td>${formatDate(s.shipment_date)}</td>
-              <td>${statusBadge(s.status || "warehouse")}</td>
-              <td><div class="row-actions">${action}</div></td>
-            </tr>`;
-          }).join("")}
-        </tbody>
+        <tbody id="deliveriesTableBody"><tr><td colspan="7" class="muted" style="text-align:center">Загрузка...</td></tr></tbody>
       </table>
     </div>
   `;
 
-  if (canLogistic) {
-    root.querySelectorAll("[data-ship-status]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = btn.dataset.shipStatus;
-        const next = btn.dataset.next;
-        try {
-          if (next === "scheduled") {
-            const form = await showForm("Назначить дату отгрузки", [
-              { name: "shipment_date", label: "Дата отгрузки", type: "date", required: true, value: new Date().toISOString().slice(0, 10) },
-            ]);
-            if (!form) return;
-            await api(`/api/shipments/${id}/status`, "PUT", { status: next, shipment_date: form.shipment_date });
-          } else {
-            await api(`/api/shipments/${id}/status`, "PUT", { status: next });
-          }
-          toast("Статус поставки обновлён");
-          renderDeliveries(user);
-        } catch (e) { toast(e.message, "error"); }
-      });
-    });
+  let items = [];
+  let filterTimer;
+
+  async function loadTable() {
+    const search = (document.getElementById("filterSearch")?.value || "").trim();
+    const status = document.getElementById("filterStatus")?.value || "";
+    const archived = document.getElementById("filterArchived")?.checked ? "1" : "0";
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (status) params.set("status", status);
+    params.set("archived", archived);
+
+    const tbody = document.getElementById("deliveriesTableBody");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center">Загрузка...</td></tr>`;
+
+    try {
+      const data = await api(`/api/shipments?${params}`);
+      items = data.items || [];
+    } catch (e) {
+      items = [];
+    }
+
+    const tbody2 = document.getElementById("deliveriesTableBody");
+    if (!tbody2) return;
+
+    if (items.length === 0) {
+      tbody2.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center">Ничего не найдено</td></tr>`;
+      return;
+    }
+
+    tbody2.innerHTML = items.map((s) => {
+      const action = !canLogistic
+        ? "—"
+        : !s.transfer_ready
+          ? "<span class=\"muted\">Ожидает передачи от бухгалтера</span>"
+          : s.status === "warehouse"
+            ? `<button data-ship-status=\"${s.id}\" data-next=\"scheduled\" type=\"button\">Назначить дату</button>`
+            : s.status === "scheduled"
+              ? `<button data-ship-status=\"${s.id}\" data-next=\"shipped\" type=\"button\">Отгружено</button>`
+              : s.status === "shipped"
+                ? `<button data-ship-status=\"${s.id}\" data-next=\"received\" type=\"button\">Получено клиентом</button>`
+                : "—";
+
+      return `<tr>
+        <td><a data-entity-type="order" data-entity-id="${s.order_id}">${esc(s.order_number || "—")}</a></td>
+        <td><a data-entity-type="tender" data-entity-id="${s.tender_id}">${esc(s.tender_number || "—")}</a></td>
+        <td><a data-entity-type="client" data-entity-id="${s.client}">${esc(s.client || "—")}</a></td>
+        <td>${esc(s.lot || "—")}</td>
+        <td>${formatDate(s.shipment_date)}</td>
+        <td>${statusBadge(s.status || "warehouse")}</td>
+        <td><div class="row-actions">${action}</div></td>
+      </tr>`;
+    }).join("");
+
+    bindTableListeners();
   }
+
+  function bindTableListeners() {
+    if (canLogistic) {
+      document.getElementById("deliveriesTableBody")?.querySelectorAll("[data-ship-status]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.shipStatus;
+          const next = btn.dataset.next;
+          try {
+            if (next === "scheduled") {
+              const form = await showForm("Назначить дату отгрузки", [
+                { name: "shipment_date", label: "Дата отгрузки", type: "date", required: true, value: new Date().toISOString().slice(0, 10) },
+              ]);
+              if (!form) return;
+              await api(`/api/shipments/${id}/status`, "PUT", { status: next, shipment_date: form.shipment_date });
+            } else {
+              await api(`/api/shipments/${id}/status`, "PUT", { status: next });
+            }
+            toast("Статус поставки обновлён");
+            loadTable();
+          } catch (e) { toast(e.message, "error"); }
+        });
+      });
+    }
+  }
+
+  document.getElementById("filterSearch")?.addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadTable, 300);
+  });
+  document.getElementById("filterStatus")?.addEventListener("change", loadTable);
+  document.getElementById("filterArchived")?.addEventListener("change", loadTable);
+
+  await loadTable();
 }
 
 async function renderClients(user) {

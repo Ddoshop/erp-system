@@ -1140,7 +1140,29 @@ function extractTenderDocuments(html, sourceUrl) {
       [todayIso]
     );
 
-    const data = await db.all("SELECT * FROM tenders WHERE is_archived = 0 ORDER BY id DESC");
+    const search = String(req.query.search || "").trim();
+    const statusFilter = String(req.query.status || "").trim();
+    const internalStatusFilter = String(req.query.internal_status || "").trim();
+    const archived = String(req.query.archived || "0").trim();
+
+    const where = [];
+    const params = [];
+
+    if (archived === "1") {
+      where.push("is_archived = 1");
+    } else if (archived !== "both") {
+      where.push("is_archived = 0");
+    }
+    if (statusFilter) { where.push("status = ?"); params.push(statusFilter); }
+    if (internalStatusFilter) { where.push("internal_status = ?"); params.push(internalStatusFilter); }
+    if (search) {
+      where.push("(number LIKE ? OR lot LIKE ? OR client LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like);
+    }
+
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const data = await db.all(`SELECT * FROM tenders ${whereClause} ORDER BY id DESC`, params);
     res.json({ items: data });
   });
 
@@ -1870,6 +1892,25 @@ function extractTenderDocuments(html, sourceUrl) {
   app.get("/api/orders", authRequired, async (req, res) => {
     await syncShipmentWithOrders(db);
 
+    const search = String(req.query.search || "").trim();
+    const statusFilter = String(req.query.status || "").trim();
+    const archived = String(req.query.archived || "0").trim();
+
+    const where = [];
+    const params = [];
+
+    const archivedStatuses = ["stocked", "closed"];
+    if (archived !== "1" && !archivedStatuses.includes(statusFilter)) {
+      where.push("o.status NOT IN ('stocked', 'closed')");
+    }
+    if (statusFilter) { where.push("o.status = ?"); params.push(statusFilter); }
+    if (search) {
+      where.push("(o.order_number LIKE ? OR t.number LIKE ? OR t.client LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like);
+    }
+
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const orders = await db.all(
       `SELECT
         o.*,
@@ -1886,8 +1927,9 @@ function extractTenderDocuments(html, sourceUrl) {
        FROM tender_orders o
        JOIN tenders t ON t.id = o.tender_id
        LEFT JOIN order_invoices i ON i.order_id = o.id
-       WHERE o.status NOT IN ('stocked', 'closed')
-       ORDER BY o.id DESC`
+       ${whereClause}
+       ORDER BY o.id DESC`,
+      params
     );
 
     const orderIds = orders.map((o) => Number(o.id));
@@ -2002,6 +2044,24 @@ function extractTenderDocuments(html, sourceUrl) {
   app.get("/api/shipments", authRequired, roleRequired("logistic", "accountant", "admin", "manager"), async (req, res) => {
     await syncShipmentWithOrders(db);
 
+    const search = String(req.query.search || "").trim();
+    const statusFilter = String(req.query.status || "").trim();
+    const archived = String(req.query.archived || "0").trim();
+
+    const where = [];
+    const params = [];
+
+    if (archived !== "1" && statusFilter !== "closed") {
+      where.push("s.status <> 'closed'");
+    }
+    if (statusFilter) { where.push("s.status = ?"); params.push(statusFilter); }
+    if (search) {
+      where.push("(o.order_number LIKE ? OR t.client LIKE ? OR t.number LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like);
+    }
+
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const items = await db.all(
       `SELECT
         s.*,
@@ -2016,8 +2076,9 @@ function extractTenderDocuments(html, sourceUrl) {
        FROM shipment_workflows s
        JOIN tender_orders o ON o.id = s.order_id
        JOIN tenders t ON t.id = o.tender_id
-       WHERE s.status <> 'closed'
-       ORDER BY s.id DESC`
+       ${whereClause}
+       ORDER BY s.id DESC`,
+      params
     );
     res.json({ items });
   });
