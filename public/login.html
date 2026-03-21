@@ -16,7 +16,6 @@
       <div class="auth-main">
         <div class="auth-tabs">
           <button id="loginTab" class="tab-btn active" type="button">Вход</button>
-          <button id="registerTab" class="tab-btn" type="button">Регистрация</button>
         </div>
 
         <form id="loginForm">
@@ -29,34 +28,6 @@
             <input id="loginPassword" type="password" required placeholder="123456">
           </div>
           <button class="btn-primary" type="submit">Войти</button>
-        </form>
-
-        <form id="registerForm" style="display:none; margin-top: 12px;">
-          <div>
-            <label for="regName">ФИО</label>
-            <input id="regName" type="text" required>
-          </div>
-          <div>
-            <label for="regEmail">Email</label>
-            <input id="regEmail" type="email" required>
-          </div>
-          <div>
-            <label for="regCompany">Компания</label>
-            <input id="regCompany" type="text" required>
-          </div>
-          <div>
-            <label for="regRole">Роль</label>
-            <select id="regRole" required>
-              <option value="manager">Менеджер</option>
-              <option value="supplier">Поставщик</option>
-              <option value="client">Клиент</option>
-            </select>
-          </div>
-          <div>
-            <label for="regPassword">Пароль</label>
-            <input id="regPassword" type="password" minlength="6" required>
-          </div>
-          <button class="btn-primary" type="submit">Создать аккаунт</button>
         </form>
       </div>
     </div>

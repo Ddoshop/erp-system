@@ -6,6 +6,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const nodemailer = require("nodemailer");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const { initDb } = require("./db");
@@ -14,8 +16,91 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const JWT_SECRET = process.env.JWT_SECRET || "change_this_secret_in_production";
 
+// ============= SECURITY MIDDLEWARE =============
+
+// Helmet for additional security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: []
+    }
+  },
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  frameguard: { action: "deny" },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" }
+}));
+
+// CORS configuration - allow only same origin by default
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : ["http://localhost:3000"];
+  
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
+
+// Rate limiting for login endpoint - prevent brute force
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per 15 minutes
+  message: "Слишком много попыток входа. Попробуйте позже.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for localhost in development
+    return (req.ip === "::1" || req.ip === "127.0.0.1") && process.env.NODE_ENV === "development";
+  }
+});
+
+// Rate limiting for API endpoints - prevent DoS
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute
+  message: "Слишком много запросов. Попробуйте позже.",
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Rate limiting for file uploads
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20, // 20 uploads per hour
+  message: "Лимит загрузок файлов превышен.",
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 app.use(express.json({ limit: "20mb" }));
 app.use(cookieParser());
+
 app.use("/assets", express.static(path.join(__dirname, "public")));
 app.use("/files", express.static(path.join(__dirname, "data", "tender_files")));
 app.use("/submission-files", express.static(path.join(__dirname, "data", "submission_packages")));
@@ -51,6 +136,91 @@ function roleRequired(...roles) {
     }
     next();
   };
+}
+
+// Account lockout mechanism - in-memory storage
+const failedLoginAttempts = new Map();
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+const LOCKOUT_THRESHOLD = 5; // lock after 5 failed attempts
+
+function recordFailedLogin(email) {
+  const key = String(email || "").toLowerCase();
+  const current = failedLoginAttempts.get(key) || { attempts: 0, lockedUntil: 0 };
+  
+  current.attempts += 1;
+  current.lastAttempt = Date.now();
+  
+  if (current.attempts >= LOCKOUT_THRESHOLD) {
+    current.lockedUntil = Date.now() + LOCKOUT_DURATION;
+  }
+  
+  failedLoginAttempts.set(key, current);
+}
+
+function isAccountLocked(email) {
+  const key = String(email || "").toLowerCase();
+  const record = failedLoginAttempts.get(key);
+  
+  if (!record) return false;
+  if (record.lockedUntil <= Date.now()) {
+    failedLoginAttempts.delete(key);
+    return false;
+  }
+  
+  return record.lockedUntil > Date.now();
+}
+
+function clearFailedLogins(email) {
+  const key = String(email || "").toLowerCase();
+  failedLoginAttempts.delete(key);
+}
+
+// IDOR (Insecure Direct Object Reference) protection
+// Verify user has access to requested resource
+async function checkTenderAccess(db, tenderId, user) {
+  const tender = await db.get("SELECT id, creator_id FROM tenders WHERE id = ?", [tenderId]);
+  if (!tender) return false;
+  
+  // Allow: creator, admin, or manager role
+  if (tender.creator_id === user.id || user.role === "admin" || user.role === "manager") {
+    return true;
+  }
+  
+  return false;
+}
+
+async function checkOrderAccess(db, orderId, user) {
+  const order = await db.get("SELECT id, tender_id FROM tender_orders WHERE id = ?", [orderId]);
+  if (!order) return false;
+  
+  const tender = await db.get("SELECT creator_id FROM tenders WHERE id = ?", [order.tender_id]);
+  if (!tender) return false;
+  
+  // Allow: tender creator, admin, or manager role
+  if (tender.creator_id === user.id || user.role === "admin" || user.role === "manager") {
+    return true;
+  }
+  
+  return false;
+}
+
+async function checkShipmentAccess(db, shipmentId, user) {
+  const shipment = await db.get(
+    `SELECT s.id FROM shipment_workflows s 
+     JOIN tender_orders o ON o.id = s.order_id 
+     JOIN tenders t ON t.id = o.tender_id 
+     WHERE s.id = ?`,
+    [shipmentId]
+  );
+  
+  if (!shipment) return false;
+  
+  // Allow: admin, manager, or logistic role
+  if (user.role === "admin" || user.role === "manager" || user.role === "logistic") {
+    return true;
+  }
+  
+  return false;
 }
 
 function pageAuth(req, res, next) {
@@ -806,46 +976,52 @@ function extractTenderDocuments(html, sourceUrl) {
     });
   });
 
-  app.post("/api/auth/register", async (req, res) => {
-    const { name, email, password, company, role } = req.body;
-    if (!name || !email || !password || !company || !role) {
-      return res.status(400).json({ message: "Заполните все поля" });
-    }
+  // Apply rate limiting to all API endpoints
+  app.use("/api/", apiLimiter);
 
-    const exists = await db.get("SELECT id FROM users WHERE email = ?", [email.toLowerCase()]);
-    if (exists) {
-      return res.status(409).json({ message: "Email уже зарегистрирован" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const result = await db.run(
-      `INSERT INTO users (name, email, password_hash, role, company, bio)
-       VALUES (?, ?, ?, ?, ?, '')`,
-      [name, email.toLowerCase(), passwordHash, role, company]
-    );
-
-    const user = await db.get(
-      "SELECT id, name, email, role, company, bio FROM users WHERE id = ?",
-      [result.lastID]
-    );
-
-    const token = signToken(user);
-    res.cookie("auth_token", token, { httpOnly: true, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
-    res.json({ user });
-  });
-
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginLimiter, async (req, res) => {
     const { email, password } = req.body;
-    const user = await db.get("SELECT * FROM users WHERE email = ?", [String(email || "").toLowerCase()]);
+    
+    // Input validation
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email и пароль обязательны" });
+    }
+    
+    // Validate email format
+    const emailString = String(email || "").trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailString) || emailString.length > 254) {
+      return res.status(401).json({ message: "Неверный email или пароль" });
+    }
+    
+    // Check if account is locked
+    if (isAccountLocked(emailString)) {
+      return res.status(429).json({ message: "Аккаунт временно заблокирован. Попробуйте позже." });
+    }
+    
+    // Validate password length
+    const passwordString = String(password || "").trim();
+    if (passwordString.length < 1 || passwordString.length > 256) {
+      recordFailedLogin(emailString);
+      return res.status(401).json({ message: "Неверный email или пароль" });
+    }
+    
+    // Query with parameterized query to prevent SQL injection
+    const user = await db.get("SELECT * FROM users WHERE email = ?", [emailString]);
 
     if (!user) {
+      recordFailedLogin(emailString);
       return res.status(401).json({ message: "Неверный email или пароль" });
     }
 
-    const ok = await bcrypt.compare(String(password || ""), user.password_hash);
+    const ok = await bcrypt.compare(passwordString, user.password_hash);
     if (!ok) {
+      recordFailedLogin(emailString);
       return res.status(401).json({ message: "Неверный email или пароль" });
     }
+
+    // Clear failed login attempts on successful login
+    clearFailedLogins(emailString);
 
     const safeUser = {
       id: user.id,
@@ -857,7 +1033,13 @@ function extractTenderDocuments(html, sourceUrl) {
     };
 
     const token = signToken(safeUser);
-    res.cookie("auth_token", token, { httpOnly: true, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
+    // Enhanced cookie security: add Secure and SameSite flags
+    res.cookie("auth_token", token, { 
+      httpOnly: true, 
+      sameSite: "strict", 
+      maxAge: 8 * 60 * 60 * 1000,
+      secure: process.env.NODE_ENV === "production"  // Enable Secure flag in production
+    });
     res.json({ user: safeUser });
   });
 
