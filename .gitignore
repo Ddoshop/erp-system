@@ -1,0 +1,13 @@
+node_modules/
+.env
+data/*.sqlite
+data/invoices/
+data/shipment_docs/
+data/submission_packages/
+data/tender_files/
+cookies.txt
+curl.txt
+curl file.txt
+admin_test.html
+server_health.txt
+fix_server.js

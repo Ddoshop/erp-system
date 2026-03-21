@@ -1,0 +1,176 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Админ панель | ТехноТрейд ERP</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <style>
+    :root[data-admin-theme="dark"] {
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a1f26;
+      --bg-tertiary: #242a33;
+      --text-primary: #e3e8f0;
+      --text-secondary: #a0aec0;
+      --border-color: #2d3139;
+      --accent-color: #3b82f6;
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --success: #10b981;
+      --warning: #f59e0b;
+    }
+
+    body.admin-dark {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+    }
+
+    .admin-dark .admin-container {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+    }
+
+    .admin-dark .admin-header {
+      background: linear-gradient(135deg, var(--accent-color), #1e40af);
+      border-bottom: 2px solid var(--accent-hover);
+    }
+
+    .admin-dark .admin-section {
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .admin-dark .stat-card {
+      background-color: var(--bg-tertiary);
+      border-left: 4px solid var(--accent-color);
+    }
+
+    .admin-dark .stat-card strong {
+      color: var(--accent-color);
+    }
+
+    .admin-dark table {
+      background-color: var(--bg-secondary);
+      color: var(--text-primary);
+    }
+
+    .admin-dark table thead {
+      background-color: var(--bg-tertiary);
+      border-bottom: 2px solid var(--accent-color);
+    }
+
+    .admin-dark table th {
+      color: var(--accent-color);
+      font-weight: 600;
+    }
+
+    .admin-dark table td {
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .admin-dark table tr:hover {
+      background-color: var(--bg-tertiary);
+    }
+
+    .admin-dark .btn {
+      color: white;
+      border-color: var(--accent-color);
+      background: transparent;
+    }
+
+    .admin-dark .btn:hover {
+      background-color: var(--accent-color);
+    }
+
+    .admin-dark .btn-sm {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    .admin-dark .badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .admin-dark .badge-success {
+      background-color: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+    }
+
+    .admin-dark .badge-warning {
+      background-color: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+    }
+
+    .admin-dark .badge-danger {
+      background-color: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+
+    .admin-dark .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .admin-dark .input-group {
+      margin-bottom: 15px;
+    }
+
+    .admin-dark input, .admin-dark select {
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: 4px;
+      width: 100%;
+    }
+
+    .admin-dark input:focus, .admin-dark select:focus {
+      outline: none;
+      border-color: var(--accent-color);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .admin-dark label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body class="admin-dark" data-page="admin">
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">TECHNOTRADE</div>
+      <div class="user-card"><strong id="userName">-</strong><div id="userRole">-</div><div id="userCompany">-</div></div>
+      <nav class="menu">
+        <a href="/dashboard">Главная</a>
+        <a href="/tenders">Тендеры</a>
+        <a href="/orders">Заказы</a>
+        <a href="/deliveries">Поставки</a>
+        <a href="/clients">Клиенты</a>
+        <a href="/reports">Отчеты</a>
+        <a class="active" href="/admin">Админ</a>
+        <a href="/profile">Профиль</a>
+        <a href="/instructions">&#1048;нструкции</a>
+      </nav>
+      <div class="menu-bottom"><button id="logoutBtn" class="btn-danger" type="button">Выйти</button></div>
+    </aside>
+    <main class="main">
+      <div class="top"><div><h1>Админ панель</h1><div class="subtitle">Управление системой и пользователями</div></div></div>
+      <div id="pageRoot" class="admin-container" style="padding: 20px; color: #3b82f6;">⏳ Загрузка панели...</div>
+    </main>
+  </div>
+  <div id="toastWrap"></div>
+  <script src="/assets/js/main.js"></script>
+</body>
+</html>
+
+
+

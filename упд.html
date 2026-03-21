@@ -1,0 +1,693 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Untitled Document</title>
+</head>
+
+<body>
+    <style>
+    @page {
+      size: A4 landscape;
+      margin: 5mm 6mm;
+    }
+
+	html {
+		background:#FFF;
+	}
+
+        body {
+	margin:0px;
+	width:100%;
+	min-height:100%;
+	background:#FFF;
+}
+
+@media screen {
+    body {
+        padding: 30px;
+    }
+}
+
+* {
+	-moz-box-sizing:border-box;
+	-webkit-box-sizing:border-box;
+	box-sizing:border-box;
+}
+
+body,td,th {
+	font-family: sans-serif;
+	font-weight: normal;
+	color:#000;
+}
+        
+body .upd, .upd td, .upd th {
+  font-size: 10px;
+  line-height: 1.08;
+    vertical-align: top;
+}
+
+.bold {
+	font-weight: bold;
+}
+
+a {
+	color:#000;
+    text-decoration: underline !important;
+}
+a img {
+	border:none;
+}
+
+img.full_width {
+	width:100%;
+	height:auto;
+}
+
+h1,h2,h3 {
+    font-weight: bold;
+}
+
+body,td,th {
+	font-size:16px;
+}
+h1 {
+	font-size:30px;
+}
+h2 {
+	font-size:24px;
+}
+h3 {
+	font-size:18px;
+}
+
+.gap {
+	height:30px;
+}
+
+.nowrap {
+	white-space:nowrap;
+}
+
+.clear {
+	clear:both;
+	height:0px;
+	line-height:0px;
+	font-size:0px;
+}
+.clearfix {
+	overflow:hidden;
+}
+
+.vertical_centered_content {
+	display: -webkit-flex;
+	-webkit-align-items: center; 
+	display: flex;
+	align-items: center;
+}
+.vertical_centered_content > .inner {
+	display:inline;
+	width:100%;
+}
+.horizontal_centered_content {
+	display: -webkit-flex;
+	-webkit-justify-content: center;
+	display: flex;
+	justify-content: center;
+	text-align:center;
+}
+.horizontal_centered_content > .inner {
+	display:inline;
+	width:100%;
+}
+
+@media screen {
+    .doc.landscape {
+        width: 1080px;
+    }
+    .doc.portrait {
+        width: 720px;
+    }
+}
+
+@media print {
+  html, body {
+    width: 297mm;
+    min-height: 210mm;
+  }
+
+  body {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .doc.landscape.upd {
+    width: 285mm;
+    margin: 0 auto;
+    zoom: 0.9;
+  }
+
+  .upd,
+  .upd td,
+  .upd th {
+    font-size: 9.2px !important;
+    line-height: 1.02 !important;
+  }
+
+  .upd table {
+    page-break-inside: auto;
+  }
+
+  .upd tr,
+  .upd td,
+  .upd th,
+  .upd div {
+    page-break-inside: avoid;
+  }
+
+  .upd td[style*="padding: 5px"],
+  .upd td[style*="padding-bottom: 5px"],
+  .upd td[style*="padding-top:0px"],
+  .upd td[style*="padding-top: 0px"] {
+    padding: 2px 3px !important;
+  }
+
+  .upd div[style*="padding-left:5px"],
+  .upd div[style*="padding-left:50px"] {
+    padding-left: 3px !important;
+  }
+}
+        
+        .updorderlist, .updorderlist td {
+            border: 1px solid #000;
+            border-collapse: collapse;
+        }
+        
+        .updskeleton, .updskeleton > tbody > tr > td {
+            border: 1px solid #FFF;
+        }
+        
+        table {
+    border-collapse: collapse;
+}
+
+        
+    </style>
+    <div class="doc landscape upd">
+        
+<table class="updskeleton" width="100%" border="0" cellspacing="0" cellpadding="0">
+  <tbody>
+        <tr>
+          <td width="110" style="padding: 5px">
+                Универсальный передаточный документ
+
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                    <tbody>
+                        <tr>
+                            <td style="vertical-align: middle !important;">Статус:</td>
+                            <td style="width: 50%; border: 1px solid #000; text-align: center !important; padding: 5px">1</td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                1 — счет-фактура и передаточный документ (акт)
+
+                2 — передаточный документ (акт)
+            </td>
+            <td style="border-left: 2px solid #000">
+                <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                    <tbody>
+                        <tr>
+                            <td width="100">Счет-фактура №</td>
+                            <td width="100" style="border-bottom: 1px solid #000; text-align: center !important">#code#</td>
+                            <td width="20">от</td>
+                            <td width="100" style="border-bottom: 1px solid #000; text-align: center !important">#date#</td>
+                            <td width="20">(1)</td>
+                            <td rowspan="2" style="text-align: right !important; font-size: 9px">
+                                Приложение № 1 к постановлению Правительства Российской Федерации от 26 декабря 2011 г. № 1137
+                                (в редакции постановления Правительства Российской Федерации от 2 апреля 2021 г. № 534)
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Исправление №</td>
+                            <td style="border-bottom: 1px solid #000"> </td>
+                            <td>от</td>
+                            <td style="border-bottom: 1px solid #000"> </td>
+                            <td>(1а)</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                    <tbody>
+                        <tr>
+                            <td width="50%">
+                                <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                                    <tbody>
+                                        <tr>
+                                            <td width="170"><b>Продавец:</b></td>
+                                            <td style="border-bottom: 1px solid #000">#companyname#</td>
+                                            <td width="20">(2)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Адрес:</td>
+                                            <td style="border-bottom: 1px solid #000">#companyaddress#</td>
+                                            <td>(2а)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>ИНН/КПП продавца:</td>
+                                            <td style="border-bottom: 1px solid #000">#companyinn#/#companykpp#</td>
+                                            <td>(2б)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Грузоотправитель и его адрес:</td>
+                                            <td style="border-bottom: 1px solid #000">#companyname#, #companyaddress#</td>
+                                            <td>(3)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Грузополучатель и его адрес:</td>
+                                            <td style="border-bottom: 1px solid #000">#clientname#, #clientaddress#</td>
+                                            <td>(4)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>К платежно-расчетному документу №</td>
+                                            <td style="border-bottom: 1px solid #000">#updpp#</td>
+                                            <td>(5)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Документ об отгрузке</td>
+                                            <td style="border-bottom: 1px solid #000"> </td>
+                                            <td>(5a)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                
+                            </td>
+                            <td>
+                                <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                                    <tbody>
+                                        <tr>
+                                            <td width="170"><b>Покупатель:</b></td>
+                                            <td style="border-bottom: 1px solid #000">#clientname#</td>
+                                            <td width="20">(6)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Адрес:</td>
+                                            <td style="border-bottom: 1px solid #000">#clientaddress#</td>
+                                            <td>(6а)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>ИНН/КПП покупателя:</td>
+                                            <td style="border-bottom: 1px solid #000">#clientinn#/#clientkpp#</td>
+                                            <td>(6б)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Валюта: наименование, код</td>
+                                            <td style="border-bottom: 1px solid #000">Российский рубль, 643</td>
+                                            <td>(7)</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Идентификатор государственного контракта, договора (соглашения) (при наличии):</td>
+                                            <td style="border-bottom: 1px solid #000"> </td>
+                                            <td>(8)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+            </td>
+        </tr>
+    </tbody>
+</table>
+        
+<table class="updorderlist" width="100%" border="0" cellspacing="0" cellpadding="5">
+  <tbody>
+    <tr style="font-size:9px">
+      <td width="110" rowspan="2">Код товара / работ, услуг</td>
+      <td width="30" rowspan="2" style="border-left:2px solid #000">№ п/п</td>
+      <td rowspan="2">Наименование товара (описание выполненных работ, оказанных услуг), имущественного права</td>
+      <td rowspan="2" width="40">Код вида това-
+ра</td>
+      <td colspan="2">Единица измерения</td>
+      <td rowspan="2" width="70">Количест-
+во (объём)</td>
+      <td rowspan="2" width="70">Цена (тариф) за единицу измерения</td>
+      <td rowspan="2" width="70">Стоимость товаров (работ, услуг), имущест-
+венных прав без налога — всего</td>
+      <td rowspan="2" width="50">В том числе сумма акциза</td>
+      <td rowspan="2" width="50">Нало-
+говая ставка</td>
+      <td rowspan="2" width="70">Сумма налога, предъяв-
+ляемая покупателю</td>
+      <td rowspan="2" width="70">Стоимость товаров (работ, услуг), имущест-
+венных прав с налогом — всего</td>
+      <td colspan="2">Страна происхождения товара</td>
+      <td rowspan="2" width="60" style="font-size:9px">Регистраци-
+онный номер декларации на товары или регист-
+рационный номер пар-
+тии товара, подлежаще-
+го просле-
+живаемости</td>
+    </tr>
+    <tr>
+      <td width="40">Код</td>
+      <td width="30">Условно-
+е обоз-
+начение (нацио-
+нальное)</td>
+      <td width="30">Циф-
+ровой код</td>
+      <td width="30">Краткое наиме-
+нование</td>
+      </tr>
+    <tr>
+      <td style="border-right:2px solid #000; text-align: center; font-size: 9px">A</td>
+      <td style="text-align: center; font-size: 9px">1</td>
+      <td style="text-align: center; font-size: 9px">1а</td>
+      <td style="text-align: center; font-size: 9px">1б</td>
+      <td style="text-align: center; font-size: 9px">2</td>
+      <td style="text-align: center; font-size: 9px">2а</td>
+      <td style="text-align: center; font-size: 9px">3</td>
+      <td style="text-align: center; font-size: 9px">4</td>
+      <td style="text-align: center; font-size: 9px">5</td>
+      <td style="text-align: center; font-size: 9px">6</td>
+      <td style="text-align: center; font-size: 9px">7</td>
+      <td style="text-align: center; font-size: 9px">8</td>
+      <td style="text-align: center; font-size: 9px">9</td>
+      <td style="text-align: center; font-size: 9px">10</td>
+      <td style="text-align: center; font-size: 9px">10а</td>
+      <td style="text-align: center; font-size: 9px">11</td>
+    </tr>
+    <tr>
+      <td style="border-right:2px solid #000"> </td>
+      <td>1</td>
+      <td>ТОВАР</td>
+      <td> </td>
+      <td>046</td>
+      <td>шт</td>
+      <td>11110.000</td>
+      <td>1000000.00</td>
+      <td>1230000.00</td>
+      <td> </td>
+      <td>20%</td>
+      <td>123123.00</td>
+      <td>1000000.00</td>
+      <td> </td>
+      <td> </td>
+      <td> </td>
+    </tr>
+    <tr>
+      <td style="border-right:2px solid #000"> </td>
+      <td colspan="7">Всего к оплате (9)</td>
+      <td>ИТОГО</td>
+      <td colspan="2" style="text-align: center !important">X</td>
+      <td>НАЛОГ</td>
+      <td>ФИНИШ</td>
+      <td colspan="3"> </td>
+      </tr>
+  </tbody>
+</table>
+<table class="updskeleton" width="100%" border="0" cellspacing="0" cellpadding="0">
+    <tbody>
+        <tr>
+            <td width="110" style="padding: 5px">
+                Документ составлен на 1 листе
+            </td>
+            <td style="border-left: 2px solid #000; border-bottom: 2px solid #000; padding-bottom: 5px">
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                    <tbody>
+                        <tr>
+                            <td width="49%">
+                                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                                  <tbody>
+                                    <tr>
+                                      <td width="170" style="padding: 5px">Руководитель организации или иное уполномоченное лицо</td>
+                                      <td style="border-bottom: 1px solid #000; padding: 5px" width="100"> </td>
+                                      <td width="10"> </td>
+                                      <td style="vertical-align: bottom !important; border-bottom: 1px solid #000; padding: 5px">#companydirectorname#</td>
+                                    </tr>
+                                    <tr>
+                                      <td> </td>
+                                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                                      <td> </td>
+                                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                            </td>
+                            <td width="2%"> </td>
+                            <td>
+                                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                                  <tbody>
+                                    <tr>
+                                      <td width="170" style="padding: 5px">Главный бухгалтер или иное уполномоченное лицо</td>
+                                      <td style="border-bottom: 1px solid #000; padding: 5px" width="100"> </td>
+                                      <td width="10"> </td>
+                                      <td style="vertical-align: bottom !important; border-bottom: 1px solid #000; padding: 5px">#companydirectorname#</td>
+                                    </tr>
+                                    <tr>
+                                      <td> </td>
+                                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                                      <td> </td>
+                                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td width="170" style="padding: 5px">Индивидуальный предприниматель или иное уполномоченное лицо</td>
+                      <td style="border-bottom: 1px solid #000; padding: 5px" width="100"> </td>
+                      <td width="10"> </td>
+                      <td style="vertical-align: bottom !important; border-bottom: 1px solid #000; padding: 5px">#companydirectorname#</td>
+                      <td width="2%"> </td>
+                      <td style="vertical-align: bottom !important; border-bottom: 1px solid #000; padding: 5px" width="49%">#companyogrn#</td>
+                    </tr>
+                    <tr>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(реквизиты свидетельства о государственной регистрации индивидуального предпринимателя)</td>
+                    </tr>
+                  </tbody>
+                </table>
+            </td>
+        </tr>
+    </tbody>
+</table>
+<table width="100%" border="0" cellspacing="0" cellpadding="0">
+  <tbody>
+    <tr>
+      <td width="280" style="padding: 5px">Основание передачи (сдачи) / получения (приемки)</td>
+      <td style="border-bottom: 1px solid #000; padding: 5px">#basis#</td>
+      <td width="10" style="padding: 5px">[8]</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td style="text-align: center; font-size:9px">(договор, доверенность и др.)</td>
+      <td> </td>
+    </tr>
+  </tbody>
+</table>
+<table width="100%" border="0" cellspacing="0" cellpadding="0">
+  <tbody>
+    <tr>
+      <td width="190" style="padding: 5px; padding-top:0px;">Данные о транспортировке и грузе</td>
+      <td style="border-bottom: 1px solid #000; padding: 5px; padding-top:0px;"> </td>
+      <td width="10" style="padding: 5px; padding-top:0px;">[9]</td>
+    </tr>
+    <tr>
+      <td> </td>
+      <td style="text-align: center; font-size:9px; padding-bottom: 5px">(транспортная накладная, поручение экспедитору, экспедиторская/складская расписка и др., масса нетто/брутто груза, если не приведены ссылки на транспортные документы, содержащие эти сведения)</td>
+      <td> </td>
+    </tr>
+  </tbody>
+</table>
+<table width="100%" border="0" cellspacing="0" cellpadding="0">
+    <tbody>
+        <tr>
+            <td width="50%" style="padding-right: 5px; border-right: 2px solid #000">
+                <div style="padding-left:5px;">Товар (груз) передал / услуги, результаты работ, права сдал</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td width="200" style="border-bottom: 1px solid #000; padding: 5px">#companydirectorposition#</td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000" width="100"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000; padding: 5px">#companydirectorname#</td>
+                      <td width="10" style="padding: 5px">[10]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(должность)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                  <tbody>
+                    <tr>
+                      <td width="210">Дата отгрузки, передачи (сдачи)</td>
+                      <td style="border-bottom: 1px solid #000;">#date#</td>
+                      <td width="10">[11]</td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Иные сведения об отгрузке, передаче</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td style="border-bottom: 1px solid #000"> </td>
+                      <td width="10" style="padding: 5px">[12]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(ссылки на неотъемлемые приложения, сопутствующие документы, иные документы и т.п.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Ответственный за правильность оформления факта хозяйственной жизни</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td width="200" style="border-bottom: 1px solid #000; padding: 5px">#companydirectorposition#</td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000" width="100"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000; padding: 5px">#companydirectorname#</td>
+                      <td width="10" style="padding: 5px">[13]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(должность)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Наименование экономического субъекта — составителя документа (в т. ч. комиссионера / агента)</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td style="border-bottom: 1px solid #000; padding: 5px">#companyname#, ИНН/КПП #companyinn#/#companykpp#</td>
+                      <td width="10" style="padding: 5px">[14]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(может не заполняться при проставлении печати в М.П., может быть указан ИНН/КПП)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:50px;">М.П.</div>
+            </td>
+            <td style="padding-left: 5px">
+                <div style="padding-left:5px;">Товар (груз) получил / услуги, результаты работ, права принял</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td width="200" style="border-bottom: 1px solid #000;"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000" width="100"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000;"> </td>
+                      <td width="10" style="padding: 5px">[15]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(должность)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                  <tbody>
+                    <tr>
+                      <td width="210">Дата получения (приемки)</td>
+                      <td style="border-bottom: 1px solid #000;"> </td>
+                      <td width="10">[16]</td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Иные сведения о получении, приемке</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td style="border-bottom: 1px solid #000"> </td>
+                      <td width="10" style="padding: 5px">[17]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(информация о наличии/отсутствии претензии; ссылки на неотъемлемые приложения и другие документы и т. п.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Ответственный за правильность оформления факта хозяйственной жизни</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td width="200" style="border-bottom: 1px solid #000"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000" width="100"> </td>
+                      <td width="10"> </td>
+                      <td style="border-bottom: 1px solid #000"> </td>
+                      <td width="10" style="padding: 5px">[18]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(должность)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(подпись)</td>
+                      <td> </td>
+                      <td style="text-align: center; font-size:9px">(ф.и.о.)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:5px;">Наименование экономического субъекта — составителя документа</div>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tbody>
+                    <tr>
+                      <td style="border-bottom: 1px solid #000; padding: 5px">#clientname#, ИНН/КПП #clientinn#/#clientkpp#</td>
+                      <td width="10" style="padding: 5px">[19]</td>
+                    </tr>
+                    <tr>
+                      <td style="text-align: center; font-size:9px">(может не заполняться при проставлении печати в М.П., может быть указан ИНН/КПП)</td>
+                      <td> </td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                <div style="padding-left:50px;">М.П.</div>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+        
+    </div>
+</body>
+</html>
