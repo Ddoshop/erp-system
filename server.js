@@ -2904,13 +2904,22 @@ function extractTenderDocuments(html, sourceUrl) {
   const REMINDER_DAYS = Number(process.env.REMINDER_DAYS || 3);
 
   function createTransport() {
-    if (!process.env.SMTP_HOST || !process.env.SMTP_USER) return null;
-    return nodemailer.createTransport({
+    if (!process.env.SMTP_HOST) return null;
+    const hasAuth = Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+    const transportConfig = {
       host: process.env.SMTP_HOST,
       port: Number(process.env.SMTP_PORT || 465),
       secure: process.env.SMTP_SECURE === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
+    };
+
+    if (hasAuth) {
+      transportConfig.auth = {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      };
+    }
+
+    return nodemailer.createTransport(transportConfig);
   }
 
   async function sendDeadlineReminders() {
@@ -2941,7 +2950,7 @@ function extractTenderDocuments(html, sourceUrl) {
       if (transporter) {
         for (const mgr of managers) {
           await transporter.sendMail({
-            from: process.env.SMTP_FROM || process.env.SMTP_USER,
+            from: process.env.SMTP_FROM || process.env.SMTP_USER || "no-reply@localhost",
             to: mgr.email,
             subject: `Напоминание о дедлайне тендера №${tender.number}`,
             text: msg,

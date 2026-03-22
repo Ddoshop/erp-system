@@ -11,3 +11,5 @@ curl file.txt
 admin_test.html
 server_health.txt
 fix_server.js
+ops/mail/README.md
+ops/mail/setup-postfix-mailserver.sh
