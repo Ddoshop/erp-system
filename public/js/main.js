@@ -2395,66 +2395,200 @@ async function renderMail(user) {
   const mailbox = payload.mailbox || {};
   const items = payload.items || [];
 
+  const safeItems = items.map((item) => ({
+    ...item,
+    preview: String(item.text_body || item.html_body || "").replace(/\s+/g, " ").trim(),
+  }));
+
+  const sentCount = safeItems.filter((item) => item.status === "sent").length;
+  const failedCount = safeItems.filter((item) => item.status === "failed").length;
+  const queuedCount = safeItems.filter((item) => item.status === "queued").length;
+
   root.innerHTML = `
-    <div class="card" style="margin-bottom:16px;">
-      <div class="top">
-        <div>
-          <h3>Почтовый ящик</h3>
-          <div class="subtitle">Ваш рабочий адрес для исходящей почты ERP</div>
+    <div class="mail-shell">
+      <aside class="mail-sidebar-panel card">
+        <button id="mailComposeOpen" class="mail-compose-btn" type="button">+ Написать</button>
+        <div class="mailbox-chip">
+          <div class="mailbox-chip-title">Текущий ящик</div>
+          <div class="mailbox-chip-address">${esc(mailbox.email || "—")}</div>
+          <div class="mailbox-chip-state">${Number(mailbox.is_active) === 1 ? "Активен" : "Отключен"}</div>
         </div>
-      </div>
-      <div class="list">
-        <div class="list-item"><strong>Пользователь:</strong> ${esc(user.name || "—")}</div>
-        <div class="list-item"><strong>Ящик:</strong> ${esc(mailbox.email || "—")}</div>
-        <div class="list-item"><strong>Статус:</strong> ${Number(mailbox.is_active) === 1 ? "Активен" : "Отключен"}</div>
-      </div>
+        <nav class="mail-folders">
+          <button class="mail-folder active" type="button" data-folder="sent">
+            <span>Отправленные</span><span class="mail-folder-count">${sentCount}</span>
+          </button>
+          <button class="mail-folder" type="button" data-folder="queued">
+            <span>Очередь</span><span class="mail-folder-count">${queuedCount}</span>
+          </button>
+          <button class="mail-folder" type="button" data-folder="failed">
+            <span>Ошибки</span><span class="mail-folder-count">${failedCount}</span>
+          </button>
+          <button class="mail-folder" type="button" data-folder="all">
+            <span>Все</span><span class="mail-folder-count">${safeItems.length}</span>
+          </button>
+        </nav>
+      </aside>
+
+      <section class="mail-list-panel card">
+        <header class="mail-list-head">
+          <h3>Почта сотрудника: ${esc(user.name || "—")}</h3>
+          <input id="mailSearch" type="search" placeholder="Поиск по теме или получателю">
+        </header>
+        <div id="mailList" class="mail-list"></div>
+      </section>
+
+      <section class="mail-preview-panel card">
+        <div id="mailPreview" class="mail-preview-empty">Выберите письмо слева, чтобы посмотреть детали</div>
+      </section>
     </div>
 
-    <div class="card" style="margin-bottom:16px;">
-      <div class="top">
-        <h3>Новое письмо</h3>
-      </div>
-      <form id="mailComposeForm" class="form-grid" style="display:grid; grid-template-columns:1fr; gap:10px;">
-        <input id="mailTo" type="email" placeholder="Кому: user@example.com" required>
-        <input id="mailSubject" type="text" placeholder="Тема" required>
-        <textarea id="mailText" rows="5" placeholder="Текст письма" required></textarea>
-        <div style="display:flex; gap:8px; justify-content:flex-end;">
-          <button id="mailSendBtn" type="submit" class="btn-primary">Отправить</button>
+    <div id="mailComposerBackdrop" class="mail-composer-backdrop" aria-hidden="true">
+      <div class="mail-composer-card">
+        <div class="mail-composer-head">
+          <h3>Новое письмо</h3>
+          <button id="mailComposeClose" type="button" class="mail-close-btn">✕</button>
         </div>
-      </form>
-    </div>
-
-    <div class="card">
-      <div class="top">
-        <h3>Исходящие письма</h3>
+        <form id="mailComposeForm" class="mail-compose-form">
+          <label>От кого</label>
+          <input type="text" value="${esc(user.name || "Сотрудник")} <${esc(mailbox.email || "no-reply")}>" readonly>
+          <label>Кому</label>
+          <input id="mailTo" type="email" placeholder="user@example.com" required>
+          <label>Тема</label>
+          <input id="mailSubject" type="text" placeholder="Тема письма" required>
+          <label>Текст</label>
+          <textarea id="mailText" rows="8" placeholder="Напишите сообщение..." required></textarea>
+          <div class="mail-compose-actions">
+            <button id="mailSendBtn" type="submit" class="btn-primary">Отправить</button>
+          </div>
+        </form>
       </div>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Дата</th>
-            <th>Кому</th>
-            <th>Тема</th>
-            <th>Статус</th>
-            <th>Ошибка</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${items.length ? items.map((item) => `
-            <tr>
-              <td>${formatDateTime(item.created_at)}</td>
-              <td>${esc(item.to_email || "—")}</td>
-              <td>${esc(item.subject || "—")}</td>
-              <td>${esc(item.status || "queued")}</td>
-              <td>${esc(item.error_text || "—")}</td>
-            </tr>
-          `).join("") : '<tr><td colspan="5" class="muted" style="text-align:center;">Пока писем нет</td></tr>'}
-        </tbody>
-      </table>
     </div>
   `;
 
-  const composeForm = document.getElementById("mailComposeForm");
-  composeForm?.addEventListener("submit", async (event) => {
+  let activeFolder = "sent";
+  let activeSearch = "";
+  let selectedId = safeItems[0]?.id || null;
+
+  function getStatusLabel(status) {
+    if (status === "sent") return "Отправлено";
+    if (status === "failed") return "Ошибка";
+    if (status === "queued") return "В очереди";
+    return status || "—";
+  }
+
+  function normalizeFolderItems() {
+    let list = [...safeItems];
+    if (activeFolder !== "all") {
+      list = list.filter((item) => item.status === activeFolder);
+    }
+    if (activeSearch) {
+      const needle = activeSearch.toLowerCase();
+      list = list.filter((item) =>
+        String(item.to_email || "").toLowerCase().includes(needle)
+        || String(item.subject || "").toLowerCase().includes(needle)
+        || String(item.preview || "").toLowerCase().includes(needle)
+      );
+    }
+    return list;
+  }
+
+  function renderList() {
+    const listWrap = document.getElementById("mailList");
+    if (!listWrap) return;
+    const current = normalizeFolderItems();
+
+    if (!current.length) {
+      listWrap.innerHTML = '<div class="mail-empty">Нет писем для выбранного фильтра</div>';
+      renderPreview(null);
+      return;
+    }
+
+    if (!current.some((item) => String(item.id) === String(selectedId))) {
+      selectedId = current[0].id;
+    }
+
+    listWrap.innerHTML = current.map((item) => `
+      <button class="mail-item ${String(item.id) === String(selectedId) ? "active" : ""}" type="button" data-mail-id="${item.id}">
+        <div class="mail-item-top">
+          <strong>${esc(item.to_email || "—")}</strong>
+          <span>${formatDateTime(item.created_at)}</span>
+        </div>
+        <div class="mail-item-subject">${esc(item.subject || "Без темы")}</div>
+        <div class="mail-item-preview">${esc(item.preview || "(пустое сообщение)")}</div>
+        <div class="mail-item-foot">
+          <span class="mail-status mail-status-${esc(item.status || "queued")}">${esc(getStatusLabel(item.status))}</span>
+        </div>
+      </button>
+    `).join("");
+
+    listWrap.querySelectorAll("[data-mail-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        selectedId = node.dataset.mailId;
+        renderList();
+      });
+    });
+
+    renderPreview(current.find((item) => String(item.id) === String(selectedId)) || current[0]);
+  }
+
+  function renderPreview(item) {
+    const preview = document.getElementById("mailPreview");
+    if (!preview) return;
+    if (!item) {
+      preview.className = "mail-preview-empty";
+      preview.textContent = "Выберите письмо слева, чтобы посмотреть детали";
+      return;
+    }
+
+    preview.className = "mail-preview";
+    preview.innerHTML = `
+      <header class="mail-preview-head">
+        <h4>${esc(item.subject || "Без темы")}</h4>
+        <span class="mail-status mail-status-${esc(item.status || "queued")}">${esc(getStatusLabel(item.status))}</span>
+      </header>
+      <div class="mail-preview-meta">
+        <div><strong>От:</strong> ${esc(item.from_email || mailbox.email || "—")}</div>
+        <div><strong>Кому:</strong> ${esc(item.to_email || "—")}</div>
+        <div><strong>Дата:</strong> ${formatDateTime(item.created_at)}</div>
+        <div><strong>Отправлено:</strong> ${item.sent_at ? formatDateTime(item.sent_at) : "—"}</div>
+      </div>
+      ${item.error_text ? `<div class="mail-preview-error">Ошибка доставки: ${esc(item.error_text)}</div>` : ""}
+      <article class="mail-preview-body">${esc(item.text_body || item.preview || "")}</article>
+    `;
+  }
+
+  document.querySelectorAll(".mail-folder").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeFolder = btn.dataset.folder || "all";
+      document.querySelectorAll(".mail-folder").forEach((it) => it.classList.remove("active"));
+      btn.classList.add("active");
+      renderList();
+    });
+  });
+
+  document.getElementById("mailSearch")?.addEventListener("input", (event) => {
+    activeSearch = String(event.target?.value || "").trim();
+    renderList();
+  });
+
+  const composer = document.getElementById("mailComposerBackdrop");
+  const openComposer = () => {
+    composer?.classList.add("open");
+    composer?.setAttribute("aria-hidden", "false");
+    document.getElementById("mailTo")?.focus();
+  };
+  const closeComposer = () => {
+    composer?.classList.remove("open");
+    composer?.setAttribute("aria-hidden", "true");
+  };
+
+  document.getElementById("mailComposeOpen")?.addEventListener("click", openComposer);
+  document.getElementById("mailComposeClose")?.addEventListener("click", closeComposer);
+  composer?.addEventListener("click", (event) => {
+    if (event.target === composer) closeComposer();
+  });
+
+  document.getElementById("mailComposeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const sendBtn = document.getElementById("mailSendBtn");
     const to = String(document.getElementById("mailTo")?.value || "").trim();
@@ -2471,6 +2605,7 @@ async function renderMail(user) {
     try {
       await api("/api/mail/send", "POST", { to, subject, text });
       toast("Письмо отправлено", "info");
+      closeComposer();
       await renderMail(user);
     } catch (error) {
       toast(error.message || "Ошибка отправки", "error");
@@ -2479,6 +2614,8 @@ async function renderMail(user) {
       sendBtn.textContent = "Отправить";
     }
   });
+
+  renderList();
 }
 
 // ═══════════════════════════════════════════════

@@ -1239,8 +1239,12 @@ function extractTenderDocuments(html, sourceUrl) {
           }
         : undefined;
 
+      const displayName = String(user.name || "Сотрудник ERP").replace(/[\r\n]+/g, " ").trim();
+      const fromHeader = `${displayName} <${mailbox.email}>`;
+
       await transporter.sendMail({
-        from: process.env.SMTP_FROM || `ERP <${mailbox.email}>`,
+        from: fromHeader,
+        sender: process.env.SMTP_FROM || mailbox.email,
         replyTo: mailbox.email,
         to,
         subject,
