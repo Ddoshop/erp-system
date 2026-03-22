@@ -98,6 +98,22 @@ async function loadMe() {
 
 function bindCommon(user) {
   const menu = document.querySelector(".menu");
+
+  // Почтовая вкладка доступна всем авторизованным пользователям.
+  if (menu) {
+    const exists = menu.querySelector('a[href="/mail"]');
+    if (exists) {
+      if (page === "mail") exists.classList.add("active");
+    } else {
+      const link = document.createElement("a");
+      link.href = "/mail";
+      link.textContent = "Почта";
+      if (page === "mail") link.classList.add("active");
+      const profile = menu.querySelector('a[href="/profile"]');
+      if (profile) menu.insertBefore(link, profile);
+      else menu.appendChild(link);
+    }
+  }
   
   // Бухгалтерия доступна для бухгалтеров и администраторов
   if (menu && ["accountant", "admin"].includes(String(user.role || ""))) {
@@ -2371,6 +2387,102 @@ async function renderAccounting() {
 
 // ═══════════════════════════════════════════════
 
+async function renderMail(user) {
+  const root = document.getElementById("pageRoot");
+  if (!root) return;
+
+  const payload = await api("/api/mail/me");
+  const mailbox = payload.mailbox || {};
+  const items = payload.items || [];
+
+  root.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="top">
+        <div>
+          <h3>Почтовый ящик</h3>
+          <div class="subtitle">Ваш рабочий адрес для исходящей почты ERP</div>
+        </div>
+      </div>
+      <div class="list">
+        <div class="list-item"><strong>Пользователь:</strong> ${esc(user.name || "—")}</div>
+        <div class="list-item"><strong>Ящик:</strong> ${esc(mailbox.email || "—")}</div>
+        <div class="list-item"><strong>Статус:</strong> ${Number(mailbox.is_active) === 1 ? "Активен" : "Отключен"}</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="top">
+        <h3>Новое письмо</h3>
+      </div>
+      <form id="mailComposeForm" class="form-grid" style="display:grid; grid-template-columns:1fr; gap:10px;">
+        <input id="mailTo" type="email" placeholder="Кому: user@example.com" required>
+        <input id="mailSubject" type="text" placeholder="Тема" required>
+        <textarea id="mailText" rows="5" placeholder="Текст письма" required></textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button id="mailSendBtn" type="submit" class="btn-primary">Отправить</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="top">
+        <h3>Исходящие письма</h3>
+      </div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Кому</th>
+            <th>Тема</th>
+            <th>Статус</th>
+            <th>Ошибка</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.length ? items.map((item) => `
+            <tr>
+              <td>${formatDateTime(item.created_at)}</td>
+              <td>${esc(item.to_email || "—")}</td>
+              <td>${esc(item.subject || "—")}</td>
+              <td>${esc(item.status || "queued")}</td>
+              <td>${esc(item.error_text || "—")}</td>
+            </tr>
+          `).join("") : '<tr><td colspan="5" class="muted" style="text-align:center;">Пока писем нет</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const composeForm = document.getElementById("mailComposeForm");
+  composeForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const sendBtn = document.getElementById("mailSendBtn");
+    const to = String(document.getElementById("mailTo")?.value || "").trim();
+    const subject = String(document.getElementById("mailSubject")?.value || "").trim();
+    const text = String(document.getElementById("mailText")?.value || "").trim();
+
+    if (!to || !subject || !text) {
+      toast("Заполните получателя, тему и текст", "error");
+      return;
+    }
+
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Отправляем...";
+    try {
+      await api("/api/mail/send", "POST", { to, subject, text });
+      toast("Письмо отправлено", "info");
+      await renderMail(user);
+    } catch (error) {
+      toast(error.message || "Ошибка отправки", "error");
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Отправить";
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════
+
 async function renderAdmin() {
   console.log("renderAdmin called, page:", page);
   const root = document.getElementById("pageRoot");
@@ -2381,10 +2493,12 @@ async function renderAdmin() {
     const usersResponse = await api("/api/users?limit=100");
     const users = usersResponse.items || [];
     const dashData = await api("/api/dashboard");
-    return { users, dashData };
+    const mailboxResponse = await api("/api/admin/mailboxes").catch(() => ({ items: [] }));
+    const mailboxes = mailboxResponse.items || [];
+    return { users, dashData, mailboxes };
   }
 
-  function buildHTML(users, dashData) {
+  function buildHTML(users, dashData, mailboxes) {
     const totalUsers = users.length;
     const admins = users.filter(u => u.role === "admin").length;
     const directors = users.filter(u => u.role === "director").length;
@@ -2411,6 +2525,23 @@ async function renderAdmin() {
         </td>
       </tr>`;
     }).join("");
+
+    const mailRows = mailboxes.length ? mailboxes.map((box) => {
+      const activeBadge = Number(box.is_active) === 1
+        ? '<span style="background:#10b98122;color:#10b981;padding:2px 8px;border-radius:12px;font-size:12px;">Активен</span>'
+        : '<span style="background:#ef444422;color:#ef4444;padding:2px 8px;border-radius:12px;font-size:12px;">Отключен</span>';
+      return `<tr>
+        <td style="padding:10px 12px;">${box.id}</td>
+        <td style="padding:10px 12px;">${esc(box.user_name || "—")}</td>
+        <td style="padding:10px 12px; color:#a0aec0;">${esc(box.user_login || "—")}</td>
+        <td style="padding:10px 12px;">${esc(box.email || "—")}</td>
+        <td style="padding:10px 12px;">${activeBadge}</td>
+        <td style="padding:10px 12px; display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="admin-mail-toggle" data-id="${box.id}" data-active="${box.is_active}" style="background:#3b82f620; color:#3b82f6; border:1px solid #3b82f6; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px;">${Number(box.is_active) === 1 ? "Отключить" : "Включить"}</button>
+          <button class="admin-mail-regen" data-id="${box.id}" style="background:#f59e0b20; color:#f59e0b; border:1px solid #f59e0b; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px;">Новый адрес</button>
+        </td>
+      </tr>`;
+    }).join("") : '<tr><td colspan="6" style="padding:12px; text-align:center; color:#a0aec0;">Почтовые ящики не найдены</td></tr>';
 
     return `
       <!-- Add/Edit User Modal -->
@@ -2488,6 +2619,27 @@ async function renderAdmin() {
             </thead>
             <tbody id="usersTableBody">
               ${usersRows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="admin-section" style="padding:20px;">
+        <h2 style="color:#3b82f6; margin:0 0 16px 0;">Почтовые ящики пользователей</h2>
+        <div style="overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse; min-width:760px;">
+            <thead>
+              <tr style="background:#242a33;">
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">ID</th>
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">Пользователь</th>
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">Логин ERP</th>
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">Почтовый адрес</th>
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">Статус</th>
+                <th style="text-align:left; padding:10px 12px; border-bottom:2px solid #3b82f6; font-size:12px; color:#3b82f6;">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${mailRows}
             </tbody>
           </table>
         </div>
@@ -2631,11 +2783,42 @@ async function renderAdmin() {
         }
       });
     });
+
+    document.querySelectorAll(".admin-mail-toggle").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const active = Number(btn.dataset.active) === 1;
+        btn.disabled = true;
+        try {
+          await api(`/api/admin/mailboxes/${id}`, "PUT", { is_active: active ? 0 : 1 });
+          toast(active ? "Ящик отключен" : "Ящик включен");
+          await renderAdmin();
+        } catch (error) {
+          toast(error.message || "Ошибка обновления", "error");
+          btn.disabled = false;
+        }
+      });
+    });
+
+    document.querySelectorAll(".admin-mail-regen").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Сгенерировать новый адрес ящика для этого пользователя?")) return;
+        btn.disabled = true;
+        try {
+          await api(`/api/admin/mailboxes/${btn.dataset.id}/regenerate`, "POST", {});
+          toast("Новый адрес ящика сгенерирован");
+          await renderAdmin();
+        } catch (error) {
+          toast(error.message || "Ошибка генерации", "error");
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   try {
-    const { users, dashData } = await loadAndRender();
-    root.innerHTML = buildHTML(users, dashData);
+    const { users, dashData, mailboxes } = await loadAndRender();
+    root.innerHTML = buildHTML(users, dashData, mailboxes);
     bindEvents(users);
   } catch (error) {
     console.error("renderAdmin error:", error);
@@ -3111,6 +3294,7 @@ async function initPage() {
   if (page === "applications") await renderApplications(user);
   if (page === "accounting")   await renderAccounting();
   if (page === "admin")        await renderAdmin();
+  if (page === "mail")         await renderMail(user);
   if (page === "instructions") renderInstructions();
 }
 

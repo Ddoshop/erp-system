@@ -15,6 +15,11 @@ const { initDb } = require("./db");
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const JWT_SECRET = process.env.JWT_SECRET || "change_this_secret_in_production";
+const MAIL_DOMAIN = String(process.env.MAIL_DOMAIN || "guserv.online").trim().toLowerCase();
+const MAIL_UNSUBSCRIBE_EMAIL = String(process.env.MAIL_UNSUBSCRIBE_EMAIL || `unsubscribe@${MAIL_DOMAIN}`).trim().toLowerCase();
+const MAIL_UNSUBSCRIBE_URL = String(process.env.MAIL_UNSUBSCRIBE_URL || "").trim();
+
+app.set("trust proxy", 1);
 
 // ============= SECURITY MIDDLEWARE =============
 
@@ -970,7 +975,74 @@ function extractTenderDocuments(html, sourceUrl) {
   app.get("/", (req, res) => res.redirect("/dashboard"));
   app.get("/login", (req, res) => res.sendFile(path.join(__dirname, "public", "login.html")));
 
-  ["dashboard", "tenders", "orders", "deliveries", "clients", "reports", "profile", "instructions", "contracts", "tasks", "applications", "accounting", "admin"].forEach((page) => {
+  function sanitizeMailboxLocalPart(source) {
+    return String(source || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, ".")
+      .replace(/\.+/g, ".")
+      .replace(/^\.|\.$/g, "")
+      .slice(0, 48);
+  }
+
+  function buildUniqueMailboxEmail(baseSource, usedSet) {
+    const base = sanitizeMailboxLocalPart(baseSource) || "user";
+    let suffix = 0;
+    let candidate = `${base}@${MAIL_DOMAIN}`;
+    while (usedSet.has(candidate)) {
+      suffix += 1;
+      candidate = `${base}${suffix}@${MAIL_DOMAIN}`;
+    }
+    usedSet.add(candidate);
+    return candidate;
+  }
+
+  async function ensureMailboxForUser(user) {
+    if (!user || !user.id) return null;
+
+    const existing = await db.get(
+      "SELECT id, user_id, email, is_active, created_at, updated_at FROM mailboxes WHERE user_id = ?",
+      [user.id]
+    );
+    if (existing) return existing;
+
+    const usedRows = await db.all("SELECT email FROM mailboxes");
+    const used = new Set(usedRows.map((row) => String(row.email || "").toLowerCase()));
+    const source = String(user.email || "").split("@")[0] || user.name;
+    const mailboxEmail = buildUniqueMailboxEmail(source, used);
+    const now = Date.now();
+
+    await db.run(
+      "INSERT INTO mailboxes (user_id, email, is_active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
+      [user.id, mailboxEmail, now, now]
+    );
+
+    return db.get(
+      "SELECT id, user_id, email, is_active, created_at, updated_at FROM mailboxes WHERE user_id = ?",
+      [user.id]
+    );
+  }
+
+  async function ensureMailboxesForAllUsers() {
+    const users = await db.all("SELECT id, name, email FROM users ORDER BY id ASC");
+    const usedRows = await db.all("SELECT email FROM mailboxes");
+    const used = new Set(usedRows.map((row) => String(row.email || "").toLowerCase()));
+    const now = Date.now();
+
+    for (const user of users) {
+      const existing = await db.get("SELECT id FROM mailboxes WHERE user_id = ?", [user.id]);
+      if (existing) continue;
+      const source = String(user.email || "").split("@")[0] || user.name;
+      const mailboxEmail = buildUniqueMailboxEmail(source, used);
+      await db.run(
+        "INSERT INTO mailboxes (user_id, email, is_active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
+        [user.id, mailboxEmail, now, now]
+      );
+    }
+  }
+
+  await ensureMailboxesForAllUsers();
+
+  ["dashboard", "tenders", "orders", "deliveries", "clients", "reports", "profile", "instructions", "contracts", "tasks", "applications", "accounting", "admin", "mail"].forEach((page) => {
     app.get(`/${page}`, pageAuth, (req, res) => {
       res.sendFile(path.join(__dirname, "public", `${page}.html`));
     });
@@ -1099,6 +1171,154 @@ function extractTenderDocuments(html, sourceUrl) {
          name ASC`
     );
     res.json({ items });
+  });
+
+  app.get("/api/mail/me", authRequired, async (req, res) => {
+    const user = await db.get("SELECT id, name, email FROM users WHERE id = ?", [req.user.id]);
+    if (!user) return res.status(404).json({ message: "Пользователь не найден" });
+
+    const mailbox = await ensureMailboxForUser(user);
+    const items = await db.all(
+      `SELECT id, direction, from_email, to_email, subject, text_body, html_body, status, error_text, created_at, sent_at
+       FROM mail_messages
+       WHERE mailbox_id = ?
+       ORDER BY id DESC
+       LIMIT 100`,
+      [mailbox.id]
+    );
+
+    res.json({ mailbox, items });
+  });
+
+  app.post("/api/mail/send", authRequired, async (req, res) => {
+    try {
+      const to = String(req.body?.to || "").trim().toLowerCase();
+      const subject = String(req.body?.subject || "").trim();
+      const textBody = String(req.body?.text || "").trim();
+      const htmlBody = String(req.body?.html || "").trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      if (!emailRegex.test(to) || !subject) {
+        return res.status(400).json({ message: "Укажите корректный email получателя и тему" });
+      }
+
+      const user = await db.get("SELECT id, name, email FROM users WHERE id = ?", [req.user.id]);
+      if (!user) return res.status(404).json({ message: "Пользователь не найден" });
+
+      const mailbox = await ensureMailboxForUser(user);
+      if (!mailbox || Number(mailbox.is_active) !== 1) {
+        return res.status(403).json({ message: "Почтовый ящик пользователя отключен" });
+      }
+
+      const now = Date.now();
+      const insertResult = await db.run(
+        `INSERT INTO mail_messages
+         (mailbox_id, user_id, direction, from_email, to_email, subject, text_body, html_body, status, error_text, created_at, sent_at)
+         VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, 'queued', '', ?, 0)`,
+        [mailbox.id, user.id, mailbox.email, to, subject, textBody, htmlBody, now]
+      );
+
+      const transporter = createTransport();
+      if (!transporter) {
+        await db.run("UPDATE mail_messages SET status = 'failed', error_text = ? WHERE id = ?", ["SMTP не настроен", insertResult.lastID]);
+        return res.status(400).json({ message: "SMTP не настроен на сервере" });
+      }
+
+      const unsubscribeParts = [];
+      if (MAIL_UNSUBSCRIBE_EMAIL) {
+        unsubscribeParts.push(`<mailto:${MAIL_UNSUBSCRIBE_EMAIL}?subject=unsubscribe>`);
+      }
+      if (MAIL_UNSUBSCRIBE_URL) {
+        unsubscribeParts.push(`<${MAIL_UNSUBSCRIBE_URL}>`);
+      }
+
+      const headers = unsubscribeParts.length
+        ? {
+            "List-Unsubscribe": unsubscribeParts.join(", "),
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          }
+        : undefined;
+
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || `ERP <${mailbox.email}>`,
+        replyTo: mailbox.email,
+        to,
+        subject,
+        text: textBody || undefined,
+        html: htmlBody || undefined,
+        headers,
+      });
+
+      await db.run(
+        "UPDATE mail_messages SET status = 'sent', sent_at = ?, error_text = '' WHERE id = ?",
+        [Date.now(), insertResult.lastID]
+      );
+
+      return res.json({ success: true, id: insertResult.lastID });
+    } catch (error) {
+      const message = String(error?.message || "Ошибка отправки");
+      if (req.body?.to) {
+        const last = await db.get("SELECT id FROM mail_messages WHERE user_id = ? ORDER BY id DESC LIMIT 1", [req.user.id]);
+        if (last) {
+          await db.run("UPDATE mail_messages SET status = 'failed', error_text = ? WHERE id = ?", [message, last.id]);
+        }
+      }
+      return res.status(500).json({ message });
+    }
+  });
+
+  app.get("/api/admin/mailboxes", authRequired, roleRequired("admin"), async (req, res) => {
+    const items = await db.all(
+      `SELECT m.id, m.user_id, m.email, m.is_active, m.created_at, m.updated_at,
+              u.name AS user_name, u.role AS user_role, u.email AS user_login
+       FROM mailboxes m
+       JOIN users u ON u.id = m.user_id
+       ORDER BY m.id DESC`
+    );
+    res.json({ items });
+  });
+
+  app.put("/api/admin/mailboxes/:id", authRequired, roleRequired("admin"), async (req, res) => {
+    const row = await db.get("SELECT * FROM mailboxes WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ message: "Почтовый ящик не найден" });
+
+    const nextEmailRaw = req.body?.email == null ? row.email : String(req.body.email).trim().toLowerCase();
+    const nextActive = req.body?.is_active == null ? Number(row.is_active) : (Number(req.body.is_active) ? 1 : 0);
+
+    if (!nextEmailRaw || !nextEmailRaw.endsWith(`@${MAIL_DOMAIN}`)) {
+      return res.status(400).json({ message: `Email ящика должен быть в домене ${MAIL_DOMAIN}` });
+    }
+
+    const conflict = await db.get("SELECT id FROM mailboxes WHERE email = ? AND id != ?", [nextEmailRaw, req.params.id]);
+    if (conflict) return res.status(409).json({ message: "Такой почтовый ящик уже существует" });
+
+    await db.run(
+      "UPDATE mailboxes SET email = ?, is_active = ?, updated_at = ? WHERE id = ?",
+      [nextEmailRaw, nextActive, Date.now(), req.params.id]
+    );
+
+    const item = await db.get("SELECT id, user_id, email, is_active, created_at, updated_at FROM mailboxes WHERE id = ?", [req.params.id]);
+    res.json({ success: true, item });
+  });
+
+  app.post("/api/admin/mailboxes/:id/regenerate", authRequired, roleRequired("admin"), async (req, res) => {
+    const row = await db.get(
+      `SELECT m.id, m.user_id, u.name, u.email AS user_email
+       FROM mailboxes m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.id = ?`,
+      [req.params.id]
+    );
+    if (!row) return res.status(404).json({ message: "Почтовый ящик не найден" });
+
+    const usedRows = await db.all("SELECT email FROM mailboxes WHERE id != ?", [req.params.id]);
+    const used = new Set(usedRows.map((entry) => String(entry.email || "").toLowerCase()));
+    const source = String(row.user_email || "").split("@")[0] || row.name;
+    const nextEmail = buildUniqueMailboxEmail(source, used);
+
+    await db.run("UPDATE mailboxes SET email = ?, updated_at = ? WHERE id = ?", [nextEmail, Date.now(), req.params.id]);
+    const item = await db.get("SELECT id, user_id, email, is_active, created_at, updated_at FROM mailboxes WHERE id = ?", [req.params.id]);
+    res.json({ success: true, item });
   });
 
   function calculateTenderDashboardProgress(tender, orders, shipments) {
@@ -2912,6 +3132,14 @@ function extractTenderDocuments(html, sourceUrl) {
       secure: process.env.SMTP_SECURE === "true",
     };
 
+    if (process.env.SMTP_IGNORE_TLS === "true") {
+      transportConfig.ignoreTLS = true;
+    }
+
+    if (process.env.SMTP_ALLOW_SELF_SIGNED === "true") {
+      transportConfig.tls = { rejectUnauthorized: false };
+    }
+
     if (hasAuth) {
       transportConfig.auth = {
         user: process.env.SMTP_USER,
@@ -2949,11 +3177,17 @@ function extractTenderDocuments(html, sourceUrl) {
 
       if (transporter) {
         for (const mgr of managers) {
+          const listHeaders = {
+            "List-Unsubscribe": `<mailto:${MAIL_UNSUBSCRIBE_EMAIL}?subject=unsubscribe>${MAIL_UNSUBSCRIBE_URL ? `, <${MAIL_UNSUBSCRIBE_URL}>` : ""}`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          };
+
           await transporter.sendMail({
             from: process.env.SMTP_FROM || process.env.SMTP_USER || "no-reply@localhost",
             to: mgr.email,
             subject: `Напоминание о дедлайне тендера №${tender.number}`,
             text: msg,
+            headers: listHeaders,
           }).catch((err) => console.error("Email error:", err.message));
         }
       } else {
@@ -2983,7 +3217,9 @@ function extractTenderDocuments(html, sourceUrl) {
         "INSERT INTO users (name, email, password_hash, role, company, bio) VALUES (?,?,?,?,?,?)",
         [name.trim(), email.trim().toLowerCase(), tempHash, role, (company || "ТехноТрейд").trim(), ""]
       );
-      res.json({ success: true, id: result.lastID });
+      const createdUser = await db.get("SELECT id, name, email FROM users WHERE id = ?", [result.lastID]);
+      const mailbox = await ensureMailboxForUser(createdUser);
+      res.json({ success: true, id: result.lastID, mailbox });
     } catch (e) {
       if (e.message && e.message.includes("UNIQUE")) return res.status(409).json({ message: "Пользователь с таким email уже существует" });
       console.error(e);

@@ -239,6 +239,31 @@ async function initDb() {
       paid_at TEXT DEFAULT '',
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS mailboxes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL UNIQUE,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL DEFAULT 'outbound',
+      from_email TEXT NOT NULL,
+      to_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      text_body TEXT DEFAULT '',
+      html_body TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'queued',
+      error_text TEXT DEFAULT '',
+      created_at INTEGER NOT NULL,
+      sent_at INTEGER DEFAULT 0
+    );
   `);
 
   // Lightweight migrations for already created databases.
