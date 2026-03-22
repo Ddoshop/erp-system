@@ -1133,14 +1133,21 @@ function extractTenderDocuments(html, sourceUrl) {
     }];
   }
 
-  async function pollIncomingImapAccount(account) {
+  async function pollIncomingImapAccount(account, report) {
+    const log = (level, msg, extra) => {
+      const line = extra !== undefined ? `[Mail Receive][${account.user}] ${msg} ${JSON.stringify(extra)}` : `[Mail Receive][${account.user}] ${msg}`;
+      if (level === "warn") console.warn(line);
+      else console.log(line);
+      if (report) report.push({ level, user: account.user, msg, extra });
+    };
+
     let ImapFlow;
     let simpleParser;
     try {
       ({ ImapFlow } = require("imapflow"));
       ({ simpleParser } = require("mailparser"));
     } catch (error) {
-      console.warn("[Mail Receive] Missing dependencies (imapflow/mailparser). Install npm dependencies.");
+      log("warn", "Missing npm packages imapflow/mailparser — run: npm install");
       return;
     }
 
@@ -1150,8 +1157,11 @@ function extractTenderDocuments(html, sourceUrl) {
     const folder = String(account?.folder || "INBOX").trim() || "INBOX";
     const mailboxEmail = String(account?.mailboxEmail || user).trim().toLowerCase();
     if (!host || !user || !pass || !mailboxEmail) {
+      log("warn", "Skipping account — missing host/user/pass/mailboxEmail");
       return;
     }
+
+    log("info", `Connecting to IMAP`, { host, port: Number(account?.port || 993), secure: account?.secure !== false, folder });
 
     const client = new ImapFlow({
       host,
@@ -1165,20 +1175,28 @@ function extractTenderDocuments(html, sourceUrl) {
     });
 
     let lock = null;
+    let inserted = 0;
+    let skipped = 0;
     try {
       await client.connect();
+      log("info", "Connected to IMAP server");
+
       lock = await client.getMailboxLock(folder);
+      log("info", `Opened mailbox folder: ${folder}`);
 
       const mailboxRows = await db.all(
         `SELECT id, user_id, email, is_active
          FROM mailboxes
          WHERE is_active = 1`
       );
+      log("info", `ERP active mailboxes in DB`, { count: mailboxRows.length, emails: mailboxRows.map((r) => r.email) });
+
       const mailboxByEmail = new Map(
         mailboxRows.map((row) => [String(row.email || "").trim().toLowerCase(), row])
       );
 
       const messageUids = await client.search({ seen: false });
+      log("info", `Unseen messages found`, { count: messageUids.length });
       if (!messageUids.length) return;
 
       for await (const msg of client.fetch(messageUids, {
@@ -1193,7 +1211,8 @@ function extractTenderDocuments(html, sourceUrl) {
             ? msg.source
             : Buffer.from(msg.source || "", "utf8");
           parsed = await simpleParser(sourceBuffer);
-        } catch {
+        } catch (parseErr) {
+          log("warn", `Failed to parse message uid=${msg.uid}`, { error: String(parseErr?.message || parseErr) });
           continue;
         }
 
@@ -1203,23 +1222,30 @@ function extractTenderDocuments(html, sourceUrl) {
         const bccEmails = parseAddressList(parsed?.bcc?.value || []);
         const recipientSet = new Set([...toEmails, ...ccEmails, ...bccEmails]);
 
+        log("info", `Processing message uid=${msg.uid}`, { from: fromEmail, to: toEmails, cc: ccEmails, subject: String(parsed?.subject || "").slice(0, 80) });
+
         const targetBoxes = mailboxRows.filter((box) => recipientSet.has(String(box.email || "").trim().toLowerCase()));
         if (!targetBoxes.length && MAIL_RECV_CATCHALL_TO) {
           const catchall = mailboxByEmail.get(MAIL_RECV_CATCHALL_TO);
           if (catchall) {
             targetBoxes.push(catchall);
+            log("info", `No direct match — routing to catchall`, { catchall: MAIL_RECV_CATCHALL_TO });
           }
         }
         if (!targetBoxes.length) {
           const ownerBox = mailboxByEmail.get(mailboxEmail);
           if (ownerBox) {
             targetBoxes.push(ownerBox);
+            log("info", `No direct match — routing to owner box`, { owner: mailboxEmail });
           }
         }
         if (!targetBoxes.length) {
+          log("warn", `No ERP mailbox found for recipients`, { recipients: [...recipientSet] });
           await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true }).catch(() => {});
           continue;
         }
+
+        log("info", `Routing to ERP mailboxes`, { targetEmails: targetBoxes.map((b) => b.email) });
 
         const subject = String(parsed?.subject || "(без темы)").trim().slice(0, 500);
         const textBody = String(parsed?.text || "").trim().slice(0, 100000);
@@ -1241,7 +1267,11 @@ function extractTenderDocuments(html, sourceUrl) {
             `SELECT id FROM mail_messages WHERE mailbox_id = ? AND external_id = ?`,
             [box.id, externalId]
           );
-          if (existing) continue;
+          if (existing) {
+            skipped++;
+            log("info", `Duplicate skipped`, { externalId, mailbox: box.email });
+            continue;
+          }
 
           await db.run(
             `INSERT INTO mail_messages
@@ -1263,12 +1293,15 @@ function extractTenderDocuments(html, sourceUrl) {
               internalTs,
             ]
           );
+          inserted++;
+          log("info", `Inserted inbound message`, { mailbox: box.email, subject: subject.slice(0, 60) });
         }
 
         await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true }).catch(() => {});
       }
+      log("info", `Poll complete`, { inserted, skipped });
     } catch (error) {
-      console.warn(`[Mail Receive] IMAP polling error for ${user}:`, String(error?.message || error));
+      log("warn", `IMAP polling error: ${String(error?.message || error)}`, { stack: String(error?.stack || "").split("\n")[1] });
     } finally {
       try {
         if (lock) lock.release();
@@ -1802,6 +1835,46 @@ function extractTenderDocuments(html, sourceUrl) {
     await db.run("UPDATE mailboxes SET email = ?, updated_at = ? WHERE id = ?", [nextEmail, Date.now(), req.params.id]);
     const item = await db.get("SELECT id, user_id, email, is_active, created_at, updated_at FROM mailboxes WHERE id = ?", [req.params.id]);
     res.json({ success: true, item });
+  });
+
+  // POST /api/mail/poll-now — ручной запуск IMAP polling (только admin, для отладки)
+  app.post("/api/mail/poll-now", authRequired, roleRequired("admin"), async (req, res) => {
+    const report = [];
+    const push = (level, msg, extra) => report.push({ level, msg, extra });
+
+    const config = {
+      enabled: MAIL_RECV_ENABLED,
+      protocol: MAIL_RECV_PROTOCOL,
+      pollMs: MAIL_RECV_POLL_MS,
+      catchallTo: MAIL_RECV_CATCHALL_TO || null,
+      accountsFile: IMAP_ACCOUNTS_FILE || null,
+    };
+
+    push("info", `MAIL_RECV_ENABLED=${MAIL_RECV_ENABLED}`);
+    if (!MAIL_RECV_ENABLED) {
+      push("warn", "MAIL_RECV_ENABLED is not 'true' in .env — polling is disabled. Set MAIL_RECV_ENABLED=true to enable automatic polling.");
+    }
+
+    let accounts = [];
+    try {
+      accounts = loadImapAccountsConfig();
+    } catch (err) {
+      push("warn", `loadImapAccountsConfig error: ${String(err?.message || err)}`);
+    }
+
+    push("info", `Accounts loaded`, { count: accounts.length, users: accounts.map((a) => `${a.user}@${a.host}`) });
+
+    if (!accounts.length) {
+      push("warn", "No IMAP accounts configured. Set IMAP_HOST + IMAP_USER + IMAP_PASS in .env, or set IMAP_ACCOUNTS_FILE pointing to a JSON accounts file.");
+      return res.json({ success: false, config, report });
+    }
+
+    for (const account of accounts) {
+      await pollIncomingImapAccount(account, report);
+    }
+
+    const hasError = report.some((r) => r.level === "warn");
+    res.json({ success: !hasError, config, report });
   });
 
   function calculateTenderDashboardProgress(tender, orders, shipments) {
