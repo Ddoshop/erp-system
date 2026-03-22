@@ -1855,6 +1855,34 @@ function extractTenderDocuments(html, sourceUrl) {
       push("warn", "MAIL_RECV_ENABLED is not 'true' in .env — polling is disabled. Set MAIL_RECV_ENABLED=true to enable automatic polling.");
     }
 
+    // Дополнительная диагностика файла аккаунтов
+    if (IMAP_ACCOUNTS_FILE) {
+      const fileExists = (() => { try { fs.accessSync(IMAP_ACCOUNTS_FILE); return true; } catch { return false; } })();
+      if (!fileExists) {
+        push("warn", `Файл IMAP_ACCOUNTS_FILE не найден: ${IMAP_ACCOUNTS_FILE}. Запустите на VPS: sudo bash ops/mail/sync-dovecot-mailboxes-from-erp.sh <домен> <путь_к_erp.sqlite>`);
+      } else {
+        try {
+          const raw = fs.readFileSync(IMAP_ACCOUNTS_FILE, "utf8");
+          const parsed = JSON.parse(raw);
+          const arr = Array.isArray(parsed?.accounts) ? parsed.accounts : Array.isArray(parsed) ? parsed : [];
+          push("info", `Файл найден, записей в JSON: ${arr.length}`, { preview: arr.slice(0, 3).map((a) => ({ user: a?.user, host: a?.host })) });
+          if (!arr.length) {
+            push("warn", `Файл существует, но массив аккаунтов пустой. Перезапустите sync-скрипт.`);
+          }
+        } catch (readErr) {
+          push("warn", `Файл найден, но не удалось прочитать/распарсить: ${String(readErr?.message || readErr)}`);
+        }
+      }
+    } else {
+      push("info", "IMAP_ACCOUNTS_FILE не задан — используются одиночные env-переменные IMAP_HOST/IMAP_USER/IMAP_PASS");
+      const singleHost = String(process.env.IMAP_HOST || "").trim();
+      const singleUser = String(process.env.IMAP_USER || "").trim();
+      const singlePass = String(process.env.IMAP_PASS || "").trim();
+      if (!singleHost || !singleUser || !singlePass) {
+        push("warn", `Одиночные IMAP env-переменные не заданы: IMAP_HOST=${singleHost || "(пусто)"}, IMAP_USER=${singleUser || "(пусто)"}, IMAP_PASS=${singlePass ? "(задан)" : "(пусто)"}`);
+      }
+    }
+
     let accounts = [];
     try {
       accounts = loadImapAccountsConfig();
@@ -1865,7 +1893,7 @@ function extractTenderDocuments(html, sourceUrl) {
     push("info", `Accounts loaded`, { count: accounts.length, users: accounts.map((a) => `${a.user}@${a.host}`) });
 
     if (!accounts.length) {
-      push("warn", "No IMAP accounts configured. Set IMAP_HOST + IMAP_USER + IMAP_PASS in .env, or set IMAP_ACCOUNTS_FILE pointing to a JSON accounts file.");
+      push("warn", "Нет настроенных IMAP аккаунтов. Смотри подсказки выше.");
       return res.json({ success: false, config, report });
     }
 
