@@ -1,0 +1,22 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "git-push-main",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"push",
+				"origin",
+				"main"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "git-push-main-2",
+			"type": "shell",
+			"command": "git push origin main",
+			"isBackground": false
+		}
+	]
+}
