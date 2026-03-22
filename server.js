@@ -1040,6 +1040,25 @@ function extractTenderDocuments(html, sourceUrl) {
     }
   }
 
+  function parseRecipientList(rawValue) {
+    const values = Array.isArray(rawValue)
+      ? rawValue
+      : String(rawValue || "")
+        .split(/[;,\n]+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+    const seen = new Set();
+    const normalized = [];
+    for (const value of values) {
+      const email = String(value || "").trim().toLowerCase();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      normalized.push(email);
+    }
+    return normalized;
+  }
+
   await ensureMailboxesForAllUsers();
 
   ["dashboard", "tenders", "orders", "deliveries", "clients", "reports", "profile", "instructions", "contracts", "tasks", "applications", "accounting", "admin", "mail"].forEach((page) => {
@@ -1179,7 +1198,7 @@ function extractTenderDocuments(html, sourceUrl) {
 
     const mailbox = await ensureMailboxForUser(user);
     const items = await db.all(
-      `SELECT id, direction, from_email, to_email, subject, text_body, html_body, status, error_text, created_at, sent_at
+      `SELECT id, direction, from_email, to_email, cc_email, bcc_email, subject, text_body, html_body, attachment_names, is_draft, status, error_text, created_at, sent_at
        FROM mail_messages
        WHERE mailbox_id = ?
        ORDER BY id DESC
@@ -1190,16 +1209,74 @@ function extractTenderDocuments(html, sourceUrl) {
     res.json({ mailbox, items });
   });
 
+  app.get("/api/mail/address-book", authRequired, async (req, res) => {
+    const contacts = [];
+    const seen = new Set();
+
+    const users = await db.all(
+      `SELECT id, name, email, role
+       FROM users
+       WHERE email IS NOT NULL AND TRIM(email) <> ''
+       ORDER BY name ASC`
+    );
+
+    for (const user of users) {
+      const email = String(user.email || "").trim().toLowerCase();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      contacts.push({
+        type: "user",
+        id: user.id,
+        name: user.name || email,
+        email,
+        note: user.role || "",
+      });
+    }
+
+    const clients = await db.all(
+      `SELECT id, person, company, email
+       FROM clients
+       WHERE email IS NOT NULL AND TRIM(email) <> ''
+       ORDER BY person ASC, company ASC`
+    );
+
+    for (const client of clients) {
+      const email = String(client.email || "").trim().toLowerCase();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      const person = String(client.person || "").trim();
+      const company = String(client.company || "").trim();
+      contacts.push({
+        type: "client",
+        id: client.id,
+        name: person || company || email,
+        email,
+        note: company,
+      });
+    }
+
+    res.json({ items: contacts });
+  });
+
   app.post("/api/mail/send", authRequired, async (req, res) => {
     try {
-      const to = String(req.body?.to || "").trim().toLowerCase();
+      const MAX_ATTACHMENTS = 10;
+      const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB per file
+      const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20 MB total
+
+      const recipients = parseRecipientList(req.body?.to);
+      const ccRecipients = parseRecipientList(req.body?.cc);
+      const bccRecipients = parseRecipientList(req.body?.bcc);
       const subject = String(req.body?.subject || "").trim();
       const textBody = String(req.body?.text || "").trim();
       const htmlBody = String(req.body?.html || "").trim();
+      const rawAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+      const draftId = req.body?.draftId == null ? 0 : Number(req.body.draftId);
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-      if (!emailRegex.test(to) || !subject) {
-        return res.status(400).json({ message: "Укажите корректный email получателя и тему" });
+      const allRecipients = [...recipients, ...ccRecipients, ...bccRecipients];
+      if (!recipients.length || allRecipients.some((email) => !emailRegex.test(email)) || !subject) {
+        return res.status(400).json({ message: "Укажите корректные email получателей и тему" });
       }
 
       const user = await db.get("SELECT id, name, email FROM users WHERE id = ?", [req.user.id]);
@@ -1210,17 +1287,92 @@ function extractTenderDocuments(html, sourceUrl) {
         return res.status(403).json({ message: "Почтовый ящик пользователя отключен" });
       }
 
+      if (rawAttachments.length > MAX_ATTACHMENTS) {
+        return res.status(400).json({ message: `Слишком много вложений. Максимум: ${MAX_ATTACHMENTS}` });
+      }
+
+      const normalizedAttachments = [];
+      let totalBytes = 0;
+      for (const file of rawAttachments) {
+        const filename = String(file?.filename || "").trim();
+        const contentBase64 = String(file?.contentBase64 || "").trim();
+        const contentType = String(file?.contentType || "application/octet-stream").trim();
+        if (!filename || !contentBase64) {
+          return res.status(400).json({ message: "Некорректные вложения" });
+        }
+
+        let buffer;
+        try {
+          buffer = Buffer.from(contentBase64, "base64");
+        } catch (e) {
+          return res.status(400).json({ message: `Не удалось прочитать вложение: ${filename}` });
+        }
+
+        if (!buffer.length || buffer.length > MAX_ATTACHMENT_BYTES) {
+          return res.status(400).json({ message: `Вложение слишком большое: ${filename}` });
+        }
+
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+          return res.status(400).json({ message: "Суммарный размер вложений превышает 20 MB" });
+        }
+
+        normalizedAttachments.push({
+          filename,
+          content: buffer,
+          contentType,
+          encoding: "base64",
+        });
+      }
+
       const now = Date.now();
-      const insertResult = await db.run(
-        `INSERT INTO mail_messages
-         (mailbox_id, user_id, direction, from_email, to_email, subject, text_body, html_body, status, error_text, created_at, sent_at)
-         VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, 'queued', '', ?, 0)`,
-        [mailbox.id, user.id, mailbox.email, to, subject, textBody, htmlBody, now]
-      );
+      const attachmentNames = normalizedAttachments.map((file) => file.filename).join(", ");
+      const ccJoined = ccRecipients.join(", ");
+      const bccJoined = bccRecipients.join(", ");
+      let messageId = 0;
+
+      if (draftId > 0) {
+        const existingDraft = await db.get(
+          "SELECT id FROM mail_messages WHERE id = ? AND mailbox_id = ? AND user_id = ?",
+          [draftId, mailbox.id, user.id]
+        );
+        if (!existingDraft) {
+          return res.status(404).json({ message: "Черновик не найден" });
+        }
+
+        await db.run(
+          `UPDATE mail_messages
+           SET direction = 'outbound',
+               from_email = ?,
+               to_email = ?,
+               cc_email = ?,
+               bcc_email = ?,
+               subject = ?,
+               text_body = ?,
+               html_body = ?,
+               attachment_names = ?,
+               is_draft = 0,
+               status = 'queued',
+               error_text = '',
+               created_at = ?,
+               sent_at = 0
+           WHERE id = ?`,
+          [mailbox.email, recipients.join(", "), ccJoined, bccJoined, subject, textBody, htmlBody, attachmentNames, now, draftId]
+        );
+        messageId = draftId;
+      } else {
+        const insertResult = await db.run(
+          `INSERT INTO mail_messages
+           (mailbox_id, user_id, direction, from_email, to_email, cc_email, bcc_email, subject, text_body, html_body, attachment_names, is_draft, status, error_text, created_at, sent_at)
+           VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', '', ?, 0)`,
+          [mailbox.id, user.id, mailbox.email, recipients.join(", "), ccJoined, bccJoined, subject, textBody, htmlBody, attachmentNames, now]
+        );
+        messageId = insertResult.lastID;
+      }
 
       const transporter = createTransport();
       if (!transporter) {
-        await db.run("UPDATE mail_messages SET status = 'failed', error_text = ? WHERE id = ?", ["SMTP не настроен", insertResult.lastID]);
+        await db.run("UPDATE mail_messages SET status = 'failed', error_text = ? WHERE id = ?", ["SMTP не настроен", messageId]);
         return res.status(400).json({ message: "SMTP не настроен на сервере" });
       }
 
@@ -1246,19 +1398,22 @@ function extractTenderDocuments(html, sourceUrl) {
         from: fromHeader,
         sender: process.env.SMTP_FROM || mailbox.email,
         replyTo: mailbox.email,
-        to,
+        to: recipients,
+        cc: ccRecipients.length ? ccRecipients : undefined,
+        bcc: bccRecipients.length ? bccRecipients : undefined,
         subject,
         text: textBody || undefined,
         html: htmlBody || undefined,
+        attachments: normalizedAttachments,
         headers,
       });
 
       await db.run(
         "UPDATE mail_messages SET status = 'sent', sent_at = ?, error_text = '' WHERE id = ?",
-        [Date.now(), insertResult.lastID]
+        [Date.now(), messageId]
       );
 
-      return res.json({ success: true, id: insertResult.lastID });
+      return res.json({ success: true, id: messageId });
     } catch (error) {
       const message = String(error?.message || "Ошибка отправки");
       if (req.body?.to) {
@@ -1268,6 +1423,77 @@ function extractTenderDocuments(html, sourceUrl) {
         }
       }
       return res.status(500).json({ message });
+    }
+  });
+
+  app.post("/api/mail/draft", authRequired, async (req, res) => {
+    try {
+      const user = await db.get("SELECT id, name, email FROM users WHERE id = ?", [req.user.id]);
+      if (!user) return res.status(404).json({ message: "Пользователь не найден" });
+
+      const mailbox = await ensureMailboxForUser(user);
+      if (!mailbox || Number(mailbox.is_active) !== 1) {
+        return res.status(403).json({ message: "Почтовый ящик пользователя отключен" });
+      }
+
+      const toRecipients = parseRecipientList(req.body?.to);
+      const ccRecipients = parseRecipientList(req.body?.cc);
+      const bccRecipients = parseRecipientList(req.body?.bcc);
+      const subject = String(req.body?.subject || "").trim();
+      const textBody = String(req.body?.text || "").trim();
+      const htmlBody = String(req.body?.html || "").trim();
+      const draftId = req.body?.draftId == null ? 0 : Number(req.body.draftId);
+      const attachmentNames = Array.isArray(req.body?.attachments)
+        ? req.body.attachments
+          .map((file) => String(file?.filename || "").trim())
+          .filter(Boolean)
+          .join(", ")
+        : "";
+
+      const now = Date.now();
+      let messageId = 0;
+      if (draftId > 0) {
+        const existingDraft = await db.get(
+          "SELECT id FROM mail_messages WHERE id = ? AND mailbox_id = ? AND user_id = ?",
+          [draftId, mailbox.id, user.id]
+        );
+        if (!existingDraft) {
+          return res.status(404).json({ message: "Черновик не найден" });
+        }
+
+        await db.run(
+          `UPDATE mail_messages
+           SET direction = 'outbound',
+               from_email = ?,
+               to_email = ?,
+               cc_email = ?,
+               bcc_email = ?,
+               subject = ?,
+               text_body = ?,
+               html_body = ?,
+               attachment_names = ?,
+               is_draft = 1,
+               status = 'draft',
+               error_text = '',
+               created_at = ?,
+               sent_at = 0
+           WHERE id = ?`,
+          [mailbox.email, toRecipients.join(", "), ccRecipients.join(", "), bccRecipients.join(", "), subject, textBody, htmlBody, attachmentNames, now, draftId]
+        );
+        messageId = draftId;
+      } else {
+        const insertResult = await db.run(
+          `INSERT INTO mail_messages
+           (mailbox_id, user_id, direction, from_email, to_email, cc_email, bcc_email, subject, text_body, html_body, attachment_names, is_draft, status, error_text, created_at, sent_at)
+           VALUES (?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, 1, 'draft', '', ?, 0)`,
+          [mailbox.id, user.id, mailbox.email, toRecipients.join(", "), ccRecipients.join(", "), bccRecipients.join(", "), subject, textBody, htmlBody, attachmentNames, now]
+        );
+        messageId = insertResult.lastID;
+      }
+
+      return res.json({ success: true, id: messageId });
+    } catch (error) {
+      return res.status(500).json({ message: String(error?.message || "Ошибка сохранения черновика") });
     }
   });
 

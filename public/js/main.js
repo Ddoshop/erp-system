@@ -2392,17 +2392,23 @@ async function renderMail(user) {
   if (!root) return;
 
   const payload = await api("/api/mail/me");
+  const addressBookPayload = await api("/api/mail/address-book").catch(() => ({ items: [] }));
   const mailbox = payload.mailbox || {};
   const items = payload.items || [];
+  const addressBook = addressBookPayload.items || [];
 
   const safeItems = items.map((item) => ({
     ...item,
     preview: String(item.text_body || item.html_body || "").replace(/\s+/g, " ").trim(),
+    ccEmails: String(item.cc_email || "").split(",").map((part) => part.trim()).filter(Boolean),
+    bccEmails: String(item.bcc_email || "").split(",").map((part) => part.trim()).filter(Boolean),
+    attachmentNames: String(item.attachment_names || "").split(",").map((part) => part.trim()).filter(Boolean),
+    isDraft: Number(item.is_draft) === 1 || String(item.status || "") === "draft",
   }));
 
-  const sentCount = safeItems.filter((item) => item.status === "sent").length;
-  const failedCount = safeItems.filter((item) => item.status === "failed").length;
-  const queuedCount = safeItems.filter((item) => item.status === "queued").length;
+  const inboxCount = safeItems.filter((item) => item.direction === "inbound" && !item.isDraft).length;
+  const sentCount = safeItems.filter((item) => item.direction === "outbound" && !item.isDraft).length;
+  const draftCount = safeItems.filter((item) => item.isDraft).length;
 
   root.innerHTML = `
     <div class="mail-shell">
@@ -2414,19 +2420,30 @@ async function renderMail(user) {
           <div class="mailbox-chip-state">${Number(mailbox.is_active) === 1 ? "Активен" : "Отключен"}</div>
         </div>
         <nav class="mail-folders">
-          <button class="mail-folder active" type="button" data-folder="sent">
+          <button class="mail-folder active" type="button" data-folder="inbox">
+            <span>Входящие</span><span class="mail-folder-count">${inboxCount}</span>
+          </button>
+          <button class="mail-folder" type="button" data-folder="sent">
             <span>Отправленные</span><span class="mail-folder-count">${sentCount}</span>
           </button>
-          <button class="mail-folder" type="button" data-folder="queued">
-            <span>Очередь</span><span class="mail-folder-count">${queuedCount}</span>
-          </button>
-          <button class="mail-folder" type="button" data-folder="failed">
-            <span>Ошибки</span><span class="mail-folder-count">${failedCount}</span>
+          <button class="mail-folder" type="button" data-folder="drafts">
+            <span>Черновики</span><span class="mail-folder-count">${draftCount}</span>
           </button>
           <button class="mail-folder" type="button" data-folder="all">
             <span>Все</span><span class="mail-folder-count">${safeItems.length}</span>
           </button>
         </nav>
+        <div class="mail-contacts-box">
+          <div class="mail-contacts-title">Адресная книга</div>
+          <div class="mail-contacts-list">
+            ${addressBook.slice(0, 12).map((contact) => `
+              <button class="mail-contact-pick" type="button" data-email="${esc(contact.email)}" data-name="${esc(contact.name || contact.email)}">
+                <strong>${esc(contact.name || contact.email)}</strong>
+                <span>${esc(contact.email)}</span>
+              </button>
+            `).join("") || '<div class="mail-empty">Контакты не найдены</div>'}
+          </div>
+        </div>
       </aside>
 
       <section class="mail-list-panel card">
@@ -2452,12 +2469,32 @@ async function renderMail(user) {
           <label>От кого</label>
           <input type="text" value="${esc(user.name || "Сотрудник")} <${esc(mailbox.email || "no-reply")}>" readonly>
           <label>Кому</label>
-          <input id="mailTo" type="email" placeholder="user@example.com" required>
+          <div class="mail-recipient-box">
+            <div id="mailToChips" class="mail-recipient-chips"></div>
+            <input id="mailToInput" type="text" list="mailAddressList" placeholder="Введите email, Enter для добавления">
+          </div>
+          <label>Копия (CC)</label>
+          <div class="mail-recipient-box">
+            <div id="mailCcChips" class="mail-recipient-chips"></div>
+            <input id="mailCcInput" type="text" list="mailAddressList" placeholder="Копия: email, Enter для добавления">
+          </div>
+          <label>Скрытая копия (BCC)</label>
+          <div class="mail-recipient-box">
+            <div id="mailBccChips" class="mail-recipient-chips"></div>
+            <input id="mailBccInput" type="text" list="mailAddressList" placeholder="Скрытая копия: email, Enter для добавления">
+          </div>
+          <datalist id="mailAddressList">
+            ${addressBook.map((contact) => `<option value="${esc(contact.email)}">${esc(contact.name || contact.email)}</option>`).join("")}
+          </datalist>
           <label>Тема</label>
-          <input id="mailSubject" type="text" placeholder="Тема письма" required>
+          <input id="mailSubject" type="text" placeholder="Тема письма">
           <label>Текст</label>
-          <textarea id="mailText" rows="8" placeholder="Напишите сообщение..." required></textarea>
+          <textarea id="mailText" rows="8" placeholder="Напишите сообщение..."></textarea>
+          <label>Вложения</label>
+          <input id="mailAttachments" type="file" multiple>
+          <div id="mailAttachmentList" class="mail-attachment-list"></div>
           <div class="mail-compose-actions">
+            <button id="mailSaveDraftBtn" type="button" class="btn-secondary">Сохранить черновик</button>
             <button id="mailSendBtn" type="submit" class="btn-primary">Отправить</button>
           </div>
         </form>
@@ -2465,26 +2502,61 @@ async function renderMail(user) {
     </div>
   `;
 
-  let activeFolder = "sent";
+  let activeFolder = "inbox";
   let activeSearch = "";
   let selectedId = safeItems[0]?.id || null;
+  let toRecipients = [];
+  let ccRecipients = [];
+  let bccRecipients = [];
+  let attachmentPayloads = [];
+  let composeDraftId = 0;
 
   function getStatusLabel(status) {
+    if (status === "draft") return "Черновик";
     if (status === "sent") return "Отправлено";
     if (status === "failed") return "Ошибка";
     if (status === "queued") return "В очереди";
     return status || "—";
   }
 
+  function getCounterparty(item) {
+    if (!item) return "—";
+    if (item.isDraft) return item.to_email || "(без получателя)";
+    if (item.direction === "inbound") return item.from_email || "—";
+    return item.to_email || "—";
+  }
+
+  function splitRecipients(value) {
+    return String(value || "").split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
+  }
+
+  function attachmentIconByName(name) {
+    const fileName = String(name || "").toLowerCase();
+    if (fileName.endsWith(".pdf")) return "📕";
+    if (fileName.endsWith(".doc") || fileName.endsWith(".docx")) return "📘";
+    if (fileName.endsWith(".xls") || fileName.endsWith(".xlsx") || fileName.endsWith(".csv")) return "📗";
+    if (fileName.endsWith(".png") || fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || fileName.endsWith(".gif") || fileName.endsWith(".webp")) return "🖼️";
+    if (fileName.endsWith(".zip") || fileName.endsWith(".rar") || fileName.endsWith(".7z")) return "🗜️";
+    if (fileName.endsWith(".txt") || fileName.endsWith(".md")) return "📄";
+    return "📎";
+  }
+
   function normalizeFolderItems() {
     let list = [...safeItems];
-    if (activeFolder !== "all") {
-      list = list.filter((item) => item.status === activeFolder);
+    if (activeFolder === "inbox") {
+      list = list.filter((item) => item.direction === "inbound" && !item.isDraft);
+    } else if (activeFolder === "sent") {
+      list = list.filter((item) => item.direction === "outbound" && !item.isDraft);
+    } else if (activeFolder === "drafts") {
+      list = list.filter((item) => item.isDraft);
     }
     if (activeSearch) {
       const needle = activeSearch.toLowerCase();
       list = list.filter((item) =>
-        String(item.to_email || "").toLowerCase().includes(needle)
+        String(item.from_email || "").toLowerCase().includes(needle)
+        || String(item.cc_email || "").toLowerCase().includes(needle)
+        || String(item.bcc_email || "").toLowerCase().includes(needle)
+        || String(item.to_email || "").toLowerCase().includes(needle)
         || String(item.subject || "").toLowerCase().includes(needle)
         || String(item.preview || "").toLowerCase().includes(needle)
       );
@@ -2510,13 +2582,14 @@ async function renderMail(user) {
     listWrap.innerHTML = current.map((item) => `
       <button class="mail-item ${String(item.id) === String(selectedId) ? "active" : ""}" type="button" data-mail-id="${item.id}">
         <div class="mail-item-top">
-          <strong>${esc(item.to_email || "—")}</strong>
+          <strong>${esc(getCounterparty(item))}</strong>
           <span>${formatDateTime(item.created_at)}</span>
         </div>
         <div class="mail-item-subject">${esc(item.subject || "Без темы")}</div>
         <div class="mail-item-preview">${esc(item.preview || "(пустое сообщение)")}</div>
         <div class="mail-item-foot">
           <span class="mail-status mail-status-${esc(item.status || "queued")}">${esc(getStatusLabel(item.status))}</span>
+          ${item.attachmentNames.length ? `<span class="mail-item-attach-flag">📎 ${item.attachmentNames.length}</span>` : ""}
         </div>
       </button>
     `).join("");
@@ -2549,12 +2622,41 @@ async function renderMail(user) {
       <div class="mail-preview-meta">
         <div><strong>От:</strong> ${esc(item.from_email || mailbox.email || "—")}</div>
         <div><strong>Кому:</strong> ${esc(item.to_email || "—")}</div>
+        ${item.ccEmails.length ? `<div><strong>Копия:</strong> ${esc(item.ccEmails.join(", "))}</div>` : ""}
+        ${item.bccEmails.length ? `<div><strong>Скрытая копия:</strong> ${esc(item.bccEmails.join(", "))}</div>` : ""}
         <div><strong>Дата:</strong> ${formatDateTime(item.created_at)}</div>
         <div><strong>Отправлено:</strong> ${item.sent_at ? formatDateTime(item.sent_at) : "—"}</div>
       </div>
+      ${item.isDraft ? '<div class="mail-preview-actions"><button id="mailEditDraftBtn" type="button" class="btn-secondary">Редактировать черновик</button></div>' : ""}
+      ${item.attachmentNames.length ? `
+        <div class="mail-preview-attachments">
+          <strong>Вложения:</strong>
+          <div class="mail-preview-attachment-tags">
+            ${item.attachmentNames.map((name) => `<span class="mail-preview-attachment">${attachmentIconByName(name)} ${esc(name)}</span>`).join("")}
+          </div>
+        </div>
+      ` : ""}
       ${item.error_text ? `<div class="mail-preview-error">Ошибка доставки: ${esc(item.error_text)}</div>` : ""}
       <article class="mail-preview-body">${esc(item.text_body || item.preview || "")}</article>
     `;
+
+    document.getElementById("mailEditDraftBtn")?.addEventListener("click", () => {
+      composeDraftId = item.id;
+      toRecipients = splitRecipients(item.to_email);
+      ccRecipients = splitRecipients(item.cc_email);
+      bccRecipients = splitRecipients(item.bcc_email);
+      const subjectEl = document.getElementById("mailSubject");
+      const textEl = document.getElementById("mailText");
+      if (subjectEl) subjectEl.value = String(item.subject || "");
+      if (textEl) textEl.value = String(item.text_body || "");
+      attachmentPayloads = [];
+      if (attachmentsInput) attachmentsInput.value = "";
+      toController.render();
+      ccController.render();
+      bccController.render();
+      renderAttachmentList();
+      openComposer();
+    });
   }
 
   document.querySelectorAll(".mail-folder").forEach((btn) => {
@@ -2572,39 +2674,276 @@ async function renderMail(user) {
   });
 
   const composer = document.getElementById("mailComposerBackdrop");
+  const toChips = document.getElementById("mailToChips");
+  const ccChips = document.getElementById("mailCcChips");
+  const bccChips = document.getElementById("mailBccChips");
+  const toInput = document.getElementById("mailToInput");
+  const ccInput = document.getElementById("mailCcInput");
+  const bccInput = document.getElementById("mailBccInput");
+  const attachmentsInput = document.getElementById("mailAttachments");
+  const attachmentList = document.getElementById("mailAttachmentList");
+  const draftBtn = document.getElementById("mailSaveDraftBtn");
+
+  function formatAttachmentSize(size) {
+    const bytes = Number(size || 0);
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+
+  function renderAttachmentList() {
+    if (!attachmentList) return;
+    if (!attachmentPayloads.length) {
+      attachmentList.innerHTML = '<div class="mail-attachment-empty">Без вложений</div>';
+      return;
+    }
+
+    attachmentList.innerHTML = attachmentPayloads.map((file, index) => `
+      <div class="mail-attachment-item">
+        <span>${attachmentIconByName(file.filename)} ${esc(file.filename)} (${formatAttachmentSize(file.size)})</span>
+        <button type="button" data-remove-attachment="${index}">Удалить</button>
+      </div>
+    `).join("");
+
+    attachmentList.querySelectorAll("[data-remove-attachment]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const index = Number(btn.dataset.removeAttachment);
+        attachmentPayloads = attachmentPayloads.filter((_, idx) => idx !== index);
+        renderAttachmentList();
+      });
+    });
+  }
+
+  async function fileToPayload(file) {
+    const fileName = String(file?.name || "").trim();
+    const contentType = String(file?.type || "application/octet-stream").trim();
+    const size = Number(file?.size || 0);
+    const buffer = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+      binary += String.fromCharCode(...chunk);
+    }
+    return {
+      filename: fileName,
+      contentType,
+      size,
+      contentBase64: btoa(binary),
+    };
+  }
+
+  function createRecipientController(chipsNode, inputNode, getList, setList) {
+    function render() {
+      if (!chipsNode) return;
+      const values = getList();
+      chipsNode.innerHTML = values.map((email) => `
+      <span class="mail-chip">
+        ${esc(email)}
+        <button type="button" data-remove-email="${esc(email)}">✕</button>
+      </span>
+    `).join("");
+      chipsNode.querySelectorAll("[data-remove-email]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const next = getList().filter((entry) => entry !== btn.dataset.removeEmail);
+          setList(next);
+          render();
+        });
+      });
+    }
+
+    function tryAdd(rawValue) {
+      const email = String(rawValue || "").trim().toLowerCase();
+      if (!email) return false;
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        toast(`Некорректный email: ${email}`, "error");
+        return false;
+      }
+      const values = getList();
+      if (!values.includes(email)) {
+        setList([...values, email]);
+        render();
+      }
+      return true;
+    }
+
+    inputNode?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === "," || event.key === ";") {
+        event.preventDefault();
+        const ok = tryAdd(inputNode.value);
+        if (ok) inputNode.value = "";
+      }
+      if (event.key === "Backspace" && !inputNode.value && getList().length) {
+        const values = getList();
+        setList(values.slice(0, -1));
+        render();
+      }
+    });
+
+    inputNode?.addEventListener("blur", () => {
+      if (!inputNode.value.trim()) return;
+      const ok = tryAdd(inputNode.value);
+      if (ok) inputNode.value = "";
+    });
+
+    return { render, tryAdd };
+  }
+
+  const toController = createRecipientController(toChips, toInput, () => toRecipients, (next) => { toRecipients = next; });
+  const ccController = createRecipientController(ccChips, ccInput, () => ccRecipients, (next) => { ccRecipients = next; });
+  const bccController = createRecipientController(bccChips, bccInput, () => bccRecipients, (next) => { bccRecipients = next; });
+
+  function resetComposer() {
+    composeDraftId = 0;
+    toRecipients = [];
+    ccRecipients = [];
+    bccRecipients = [];
+    attachmentPayloads = [];
+    toController.render();
+    ccController.render();
+    bccController.render();
+    renderAttachmentList();
+    if (toInput) toInput.value = "";
+    if (ccInput) ccInput.value = "";
+    if (bccInput) bccInput.value = "";
+    if (attachmentsInput) attachmentsInput.value = "";
+    const subjectEl = document.getElementById("mailSubject");
+    const textEl = document.getElementById("mailText");
+    if (subjectEl) subjectEl.value = "";
+    if (textEl) textEl.value = "";
+  }
+
   const openComposer = () => {
     composer?.classList.add("open");
     composer?.setAttribute("aria-hidden", "false");
-    document.getElementById("mailTo")?.focus();
+    toInput?.focus();
   };
   const closeComposer = () => {
     composer?.classList.remove("open");
     composer?.setAttribute("aria-hidden", "true");
   };
 
-  document.getElementById("mailComposeOpen")?.addEventListener("click", openComposer);
+  attachmentsInput?.addEventListener("change", async () => {
+    const fileList = Array.from(attachmentsInput.files || []);
+    if (!fileList.length) {
+      attachmentPayloads = [];
+      renderAttachmentList();
+      return;
+    }
+
+    try {
+      const payloads = [];
+      for (const file of fileList) {
+        payloads.push(await fileToPayload(file));
+      }
+      attachmentPayloads = payloads;
+      renderAttachmentList();
+    } catch (error) {
+      toast("Не удалось прочитать вложения", "error");
+    }
+  });
+
+  document.getElementById("mailComposeOpen")?.addEventListener("click", () => {
+    resetComposer();
+    openComposer();
+  });
   document.getElementById("mailComposeClose")?.addEventListener("click", closeComposer);
+  document.querySelectorAll(".mail-contact-pick").forEach((node) => {
+    node.addEventListener("click", () => {
+      const email = String(node.dataset.email || "").trim();
+      if (!email) return;
+      if (!composer?.classList.contains("open")) {
+        resetComposer();
+        openComposer();
+      }
+      toController.tryAdd(email);
+    });
+  });
   composer?.addEventListener("click", (event) => {
     if (event.target === composer) closeComposer();
   });
 
-  document.getElementById("mailComposeForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const sendBtn = document.getElementById("mailSendBtn");
-    const to = String(document.getElementById("mailTo")?.value || "").trim();
+  async function saveDraft() {
+    if (toInput?.value && toInput.value.trim()) {
+      const ok = toController.tryAdd(toInput.value);
+      if (ok) toInput.value = "";
+    }
+    if (ccInput?.value && ccInput.value.trim()) {
+      const ok = ccController.tryAdd(ccInput.value);
+      if (ok) ccInput.value = "";
+    }
+    if (bccInput?.value && bccInput.value.trim()) {
+      const ok = bccController.tryAdd(bccInput.value);
+      if (ok) bccInput.value = "";
+    }
+
     const subject = String(document.getElementById("mailSubject")?.value || "").trim();
     const text = String(document.getElementById("mailText")?.value || "").trim();
 
-    if (!to || !subject || !text) {
-      toast("Заполните получателя, тему и текст", "error");
+    draftBtn.disabled = true;
+    draftBtn.textContent = "Сохраняем...";
+    try {
+      const result = await api("/api/mail/draft", "POST", {
+        draftId: composeDraftId || undefined,
+        to: toRecipients,
+        cc: ccRecipients,
+        bcc: bccRecipients,
+        subject,
+        text,
+        attachments: attachmentPayloads,
+      });
+      composeDraftId = Number(result?.id || composeDraftId || 0);
+      toast("Черновик сохранен", "info");
+      await renderMail(user);
+    } catch (error) {
+      toast(error.message || "Ошибка сохранения черновика", "error");
+    } finally {
+      draftBtn.disabled = false;
+      draftBtn.textContent = "Сохранить черновик";
+    }
+  }
+
+  draftBtn?.addEventListener("click", saveDraft);
+
+  document.getElementById("mailComposeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const sendBtn = document.getElementById("mailSendBtn");
+    if (toInput?.value && toInput.value.trim()) {
+      const ok = toController.tryAdd(toInput.value);
+      if (ok) toInput.value = "";
+    }
+    if (ccInput?.value && ccInput.value.trim()) {
+      const ok = ccController.tryAdd(ccInput.value);
+      if (ok) ccInput.value = "";
+    }
+    if (bccInput?.value && bccInput.value.trim()) {
+      const ok = bccController.tryAdd(bccInput.value);
+      if (ok) bccInput.value = "";
+    }
+    const subject = String(document.getElementById("mailSubject")?.value || "").trim();
+    const text = String(document.getElementById("mailText")?.value || "").trim();
+
+    if (!toRecipients.length || !subject || !text) {
+      toast("Добавьте хотя бы одного получателя, тему и текст", "error");
       return;
     }
 
     sendBtn.disabled = true;
     sendBtn.textContent = "Отправляем...";
     try {
-      await api("/api/mail/send", "POST", { to, subject, text });
+      await api("/api/mail/send", "POST", {
+        draftId: composeDraftId || undefined,
+        to: toRecipients,
+        cc: ccRecipients,
+        bcc: bccRecipients,
+        subject,
+        text,
+        attachments: attachmentPayloads,
+      });
       toast("Письмо отправлено", "info");
+      resetComposer();
       closeComposer();
       await renderMail(user);
     } catch (error) {
@@ -2615,7 +2954,11 @@ async function renderMail(user) {
     }
   });
 
+  toController.render();
+  ccController.render();
+  bccController.render();
   renderList();
+  renderAttachmentList();
 }
 
 // ═══════════════════════════════════════════════

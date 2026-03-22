@@ -256,9 +256,13 @@ async function initDb() {
       direction TEXT NOT NULL DEFAULT 'outbound',
       from_email TEXT NOT NULL,
       to_email TEXT NOT NULL,
+      cc_email TEXT DEFAULT '',
+      bcc_email TEXT DEFAULT '',
       subject TEXT NOT NULL,
       text_body TEXT DEFAULT '',
       html_body TEXT DEFAULT '',
+      attachment_names TEXT DEFAULT '',
+      is_draft INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'queued',
       error_text TEXT DEFAULT '',
       created_at INTEGER NOT NULL,
@@ -312,6 +316,38 @@ async function initDb() {
 
   try {
     await db.exec("ALTER TABLE tasks ADD COLUMN created_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
+  } catch (error) {
+    if (!String(error.message || "").includes("duplicate column name")) {
+      throw error;
+    }
+  }
+
+  try {
+    await db.exec("ALTER TABLE mail_messages ADD COLUMN attachment_names TEXT DEFAULT ''");
+  } catch (error) {
+    if (!String(error.message || "").includes("duplicate column name")) {
+      throw error;
+    }
+  }
+
+  try {
+    await db.exec("ALTER TABLE mail_messages ADD COLUMN cc_email TEXT DEFAULT ''");
+  } catch (error) {
+    if (!String(error.message || "").includes("duplicate column name")) {
+      throw error;
+    }
+  }
+
+  try {
+    await db.exec("ALTER TABLE mail_messages ADD COLUMN bcc_email TEXT DEFAULT ''");
+  } catch (error) {
+    if (!String(error.message || "").includes("duplicate column name")) {
+      throw error;
+    }
+  }
+
+  try {
+    await db.exec("ALTER TABLE mail_messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0");
   } catch (error) {
     if (!String(error.message || "").includes("duplicate column name")) {
       throw error;
