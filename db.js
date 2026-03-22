@@ -253,6 +253,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      external_id TEXT DEFAULT '',
       direction TEXT NOT NULL DEFAULT 'outbound',
       from_email TEXT NOT NULL,
       to_email TEXT NOT NULL,
@@ -348,6 +349,14 @@ async function initDb() {
 
   try {
     await db.exec("ALTER TABLE mail_messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0");
+  } catch (error) {
+    if (!String(error.message || "").includes("duplicate column name")) {
+      throw error;
+    }
+  }
+
+  try {
+    await db.exec("ALTER TABLE mail_messages ADD COLUMN external_id TEXT DEFAULT ''");
   } catch (error) {
     if (!String(error.message || "").includes("duplicate column name")) {
       throw error;

@@ -1776,6 +1776,25 @@ body.admin-dark [data-entity-type][data-entity-id]:hover {
   background: #fff;
 }
 
+.mail-compose-inline-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+.mail-link-btn {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 13px;
+  padding: 0;
+}
+
+.mail-ccbcc-wrap {
+  display: grid;
+  gap: 8px;
+}
+
 .mail-recipient-chips {
   display: flex;
   gap: 6px;
@@ -1803,19 +1822,37 @@ body.admin-dark [data-entity-type][data-entity-id]:hover {
   font-size: 12px;
 }
 
-#mailToInput {
+#mailToInput,
+#mailCcInput,
+#mailBccInput {
   border: none;
   padding: 4px 6px;
+  width: 100%;
 }
 
-#mailToInput:focus {
+#mailToInput:focus,
+#mailCcInput:focus,
+#mailBccInput:focus {
   outline: none;
 }
 
 .mail-compose-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 8px;
+}
+
+.mail-attachment-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mail-attachment-help {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .mail-attachment-list {

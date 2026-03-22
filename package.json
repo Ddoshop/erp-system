@@ -14,7 +14,9 @@
     "express": "^4.19.2",
     "express-rate-limit": "^8.3.1",
     "helmet": "^8.1.0",
+    "imapflow": "^1.0.181",
     "jsonwebtoken": "^9.0.2",
+    "mailparser": "^3.7.5",
     "nodemailer": "^6.9.13",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7"

@@ -18,6 +18,11 @@ const JWT_SECRET = process.env.JWT_SECRET || "change_this_secret_in_production";
 const MAIL_DOMAIN = String(process.env.MAIL_DOMAIN || "guserv.online").trim().toLowerCase();
 const MAIL_UNSUBSCRIBE_EMAIL = String(process.env.MAIL_UNSUBSCRIBE_EMAIL || `unsubscribe@${MAIL_DOMAIN}`).trim().toLowerCase();
 const MAIL_UNSUBSCRIBE_URL = String(process.env.MAIL_UNSUBSCRIBE_URL || "").trim();
+const MAIL_RECV_ENABLED = process.env.MAIL_RECV_ENABLED === "true";
+const MAIL_RECV_PROTOCOL = String(process.env.MAIL_RECV_PROTOCOL || "imap").trim().toLowerCase();
+const MAIL_RECV_POLL_MS = Number(process.env.MAIL_RECV_POLL_MS || 120000);
+const MAIL_RECV_CATCHALL_TO = String(process.env.MAIL_RECV_CATCHALL_TO || "").trim().toLowerCase();
+const IMAP_ACCOUNTS_FILE = String(process.env.IMAP_ACCOUNTS_FILE || "").trim();
 
 app.set("trust proxy", 1);
 
@@ -1057,6 +1062,254 @@ function extractTenderDocuments(html, sourceUrl) {
       normalized.push(email);
     }
     return normalized;
+  }
+
+  function parseAddressList(values) {
+    const list = Array.isArray(values) ? values : [];
+    return list
+      .map((entry) => String(entry?.address || "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  function parseAddressSingle(values) {
+    return parseAddressList(values)[0] || "";
+  }
+
+  let incomingPollInProgress = false;
+
+  function loadImapAccountsConfig() {
+    const host = String(process.env.IMAP_HOST || "").trim();
+    const port = Number(process.env.IMAP_PORT || 993);
+    const secure = process.env.IMAP_SECURE !== "false";
+    const tlsRejectUnauthorized = process.env.IMAP_TLS_REJECT_UNAUTHORIZED !== "false";
+    const folder = String(process.env.IMAP_FOLDER || "INBOX").trim() || "INBOX";
+
+    if (IMAP_ACCOUNTS_FILE) {
+      try {
+        const raw = fs.readFileSync(IMAP_ACCOUNTS_FILE, "utf8");
+        const parsed = JSON.parse(raw);
+        const accounts = Array.isArray(parsed?.accounts)
+          ? parsed.accounts
+          : Array.isArray(parsed)
+            ? parsed
+            : [];
+
+        return accounts
+          .map((entry) => {
+            const user = String(entry?.user || "").trim().toLowerCase();
+            const pass = String(entry?.pass || "").trim();
+            return {
+              user,
+              pass,
+              host: String(entry?.host || host).trim(),
+              port: Number(entry?.port || port),
+              secure: entry?.secure == null ? secure : Boolean(entry.secure),
+              tlsRejectUnauthorized: entry?.tlsRejectUnauthorized == null
+                ? tlsRejectUnauthorized
+                : Boolean(entry.tlsRejectUnauthorized),
+              folder: String(entry?.folder || folder).trim() || "INBOX",
+              mailboxEmail: String(entry?.mailboxEmail || user).trim().toLowerCase(),
+            };
+          })
+          .filter((entry) => entry.user && entry.pass && entry.host);
+      } catch (error) {
+        console.warn("[Mail Receive] Cannot read IMAP accounts file:", String(error?.message || error));
+      }
+    }
+
+    const user = String(process.env.IMAP_USER || "").trim().toLowerCase();
+    const pass = String(process.env.IMAP_PASS || "").trim();
+    if (!host || !user || !pass) return [];
+
+    return [{
+      user,
+      pass,
+      host,
+      port,
+      secure,
+      tlsRejectUnauthorized,
+      folder,
+      mailboxEmail: user,
+    }];
+  }
+
+  async function pollIncomingImapAccount(account) {
+    let ImapFlow;
+    let simpleParser;
+    try {
+      ({ ImapFlow } = require("imapflow"));
+      ({ simpleParser } = require("mailparser"));
+    } catch (error) {
+      console.warn("[Mail Receive] Missing dependencies (imapflow/mailparser). Install npm dependencies.");
+      return;
+    }
+
+    const host = String(account?.host || "").trim();
+    const user = String(account?.user || "").trim();
+    const pass = String(account?.pass || "").trim();
+    const folder = String(account?.folder || "INBOX").trim() || "INBOX";
+    const mailboxEmail = String(account?.mailboxEmail || user).trim().toLowerCase();
+    if (!host || !user || !pass || !mailboxEmail) {
+      return;
+    }
+
+    const client = new ImapFlow({
+      host,
+      port: Number(account?.port || 993),
+      secure: account?.secure !== false,
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: account?.tlsRejectUnauthorized !== false,
+      },
+      logger: false,
+    });
+
+    let lock = null;
+    try {
+      await client.connect();
+      lock = await client.getMailboxLock(folder);
+
+      const mailboxRows = await db.all(
+        `SELECT id, user_id, email, is_active
+         FROM mailboxes
+         WHERE is_active = 1`
+      );
+      const mailboxByEmail = new Map(
+        mailboxRows.map((row) => [String(row.email || "").trim().toLowerCase(), row])
+      );
+
+      const messageUids = await client.search({ seen: false });
+      if (!messageUids.length) return;
+
+      for await (const msg of client.fetch(messageUids, {
+        uid: true,
+        envelope: true,
+        source: true,
+        internalDate: true,
+      })) {
+        let parsed;
+        try {
+          const sourceBuffer = Buffer.isBuffer(msg.source)
+            ? msg.source
+            : Buffer.from(msg.source || "", "utf8");
+          parsed = await simpleParser(sourceBuffer);
+        } catch {
+          continue;
+        }
+
+        const fromEmail = parseAddressSingle(parsed?.from?.value || []);
+        const toEmails = parseAddressList(parsed?.to?.value || []);
+        const ccEmails = parseAddressList(parsed?.cc?.value || []);
+        const bccEmails = parseAddressList(parsed?.bcc?.value || []);
+        const recipientSet = new Set([...toEmails, ...ccEmails, ...bccEmails]);
+
+        const targetBoxes = mailboxRows.filter((box) => recipientSet.has(String(box.email || "").trim().toLowerCase()));
+        if (!targetBoxes.length && MAIL_RECV_CATCHALL_TO) {
+          const catchall = mailboxByEmail.get(MAIL_RECV_CATCHALL_TO);
+          if (catchall) {
+            targetBoxes.push(catchall);
+          }
+        }
+        if (!targetBoxes.length) {
+          const ownerBox = mailboxByEmail.get(mailboxEmail);
+          if (ownerBox) {
+            targetBoxes.push(ownerBox);
+          }
+        }
+        if (!targetBoxes.length) {
+          await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true }).catch(() => {});
+          continue;
+        }
+
+        const subject = String(parsed?.subject || "(без темы)").trim().slice(0, 500);
+        const textBody = String(parsed?.text || "").trim().slice(0, 100000);
+        const htmlBody = String(parsed?.html || "").trim().slice(0, 100000);
+        const attachmentNames = Array.isArray(parsed?.attachments)
+          ? parsed.attachments
+            .map((file) => String(file?.filename || "").trim())
+            .filter(Boolean)
+            .join(", ")
+          : "";
+        const messageId = String(parsed?.messageId || "").trim();
+        const internalTs = msg.internalDate
+          ? new Date(msg.internalDate).getTime()
+          : Date.now();
+
+        for (const box of targetBoxes) {
+          const externalId = `imap:${user}:${msg.uid}:${messageId || "no-id"}`;
+          const existing = await db.get(
+            `SELECT id FROM mail_messages WHERE mailbox_id = ? AND external_id = ?`,
+            [box.id, externalId]
+          );
+          if (existing) continue;
+
+          await db.run(
+            `INSERT INTO mail_messages
+             (mailbox_id, user_id, external_id, direction, from_email, to_email, cc_email, bcc_email, subject, text_body, html_body, attachment_names, is_draft, status, error_text, created_at, sent_at)
+             VALUES (?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, 0, 'sent', '', ?, ?)`,
+            [
+              box.id,
+              box.user_id,
+              externalId,
+              fromEmail || "unknown@external",
+              toEmails.join(", "),
+              ccEmails.join(", "),
+              bccEmails.join(", "),
+              subject,
+              textBody,
+              htmlBody,
+              attachmentNames,
+              internalTs,
+              internalTs,
+            ]
+          );
+        }
+
+        await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true }).catch(() => {});
+      }
+    } catch (error) {
+      console.warn(`[Mail Receive] IMAP polling error for ${user}:`, String(error?.message || error));
+    } finally {
+      try {
+        if (lock) lock.release();
+      } catch {
+        // ignore mailbox lock release errors
+      }
+      try {
+        await client.logout();
+      } catch {
+        // ignore logout errors
+      }
+    }
+  }
+
+  async function pollIncomingImap() {
+    if (!MAIL_RECV_ENABLED) return;
+    if (incomingPollInProgress) return;
+    incomingPollInProgress = true;
+    try {
+      const accounts = loadImapAccountsConfig();
+      if (!accounts.length) {
+        console.warn("[Mail Receive] IMAP enabled, but no account credentials configured.");
+        return;
+      }
+
+      for (const account of accounts) {
+        // Process accounts sequentially to avoid overlapping mailbox locks and spikes.
+        await pollIncomingImapAccount(account);
+      }
+    } finally {
+      incomingPollInProgress = false;
+    }
+  }
+
+  async function pollIncomingMail() {
+    if (!MAIL_RECV_ENABLED) return;
+    if (MAIL_RECV_PROTOCOL === "imap") {
+      await pollIncomingImap();
+      return;
+    }
+    console.warn(`[Mail Receive] Unsupported protocol: ${MAIL_RECV_PROTOCOL}. Use imap.`);
   }
 
   await ensureMailboxesForAllUsers();
@@ -3428,6 +3681,11 @@ function extractTenderDocuments(html, sourceUrl) {
 
   sendDeadlineReminders();
   setInterval(sendDeadlineReminders, 6 * 60 * 60 * 1000);
+
+  if (MAIL_RECV_ENABLED) {
+    pollIncomingMail();
+    setInterval(pollIncomingMail, Math.max(30000, MAIL_RECV_POLL_MS));
+  }
 
   // ── Admin User Management API ───────────────────────────────────
   const crypto = require("crypto");

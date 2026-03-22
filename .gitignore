@@ -13,3 +13,6 @@ server_health.txt
 fix_server.js
 ops/mail/README.md
 ops/mail/setup-postfix-mailserver.sh
+.env.example
+ops/mail/setup-dovecot-imap.sh
+ops/mail/sync-dovecot-mailboxes-from-erp.sh

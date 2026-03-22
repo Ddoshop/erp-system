@@ -2392,10 +2392,8 @@ async function renderMail(user) {
   if (!root) return;
 
   const payload = await api("/api/mail/me");
-  const addressBookPayload = await api("/api/mail/address-book").catch(() => ({ items: [] }));
   const mailbox = payload.mailbox || {};
   const items = payload.items || [];
-  const addressBook = addressBookPayload.items || [];
 
   const safeItems = items.map((item) => ({
     ...item,
@@ -2433,17 +2431,6 @@ async function renderMail(user) {
             <span>Все</span><span class="mail-folder-count">${safeItems.length}</span>
           </button>
         </nav>
-        <div class="mail-contacts-box">
-          <div class="mail-contacts-title">Адресная книга</div>
-          <div class="mail-contacts-list">
-            ${addressBook.slice(0, 12).map((contact) => `
-              <button class="mail-contact-pick" type="button" data-email="${esc(contact.email)}" data-name="${esc(contact.name || contact.email)}">
-                <strong>${esc(contact.name || contact.email)}</strong>
-                <span>${esc(contact.email)}</span>
-              </button>
-            `).join("") || '<div class="mail-empty">Контакты не найдены</div>'}
-          </div>
-        </div>
       </aside>
 
       <section class="mail-list-panel card">
@@ -2471,27 +2458,32 @@ async function renderMail(user) {
           <label>Кому</label>
           <div class="mail-recipient-box">
             <div id="mailToChips" class="mail-recipient-chips"></div>
-            <input id="mailToInput" type="text" list="mailAddressList" placeholder="Введите email, Enter для добавления">
+            <input id="mailToInput" type="text" placeholder="Введите email, Enter для добавления">
           </div>
-          <label>Копия (CC)</label>
-          <div class="mail-recipient-box">
-            <div id="mailCcChips" class="mail-recipient-chips"></div>
-            <input id="mailCcInput" type="text" list="mailAddressList" placeholder="Копия: email, Enter для добавления">
+          <div class="mail-compose-inline-actions">
+            <button id="mailToggleCcBcc" type="button" class="mail-link-btn">+ Копия / Скрытая копия</button>
           </div>
-          <label>Скрытая копия (BCC)</label>
-          <div class="mail-recipient-box">
-            <div id="mailBccChips" class="mail-recipient-chips"></div>
-            <input id="mailBccInput" type="text" list="mailAddressList" placeholder="Скрытая копия: email, Enter для добавления">
+          <div id="mailCcBccWrap" class="mail-ccbcc-wrap" hidden>
+            <label>Копия (CC)</label>
+            <div class="mail-recipient-box">
+              <div id="mailCcChips" class="mail-recipient-chips"></div>
+              <input id="mailCcInput" type="text" placeholder="Копия: email, Enter для добавления">
+            </div>
+            <label>Скрытая копия (BCC)</label>
+            <div class="mail-recipient-box">
+              <div id="mailBccChips" class="mail-recipient-chips"></div>
+              <input id="mailBccInput" type="text" placeholder="Скрытая копия: email, Enter для добавления">
+            </div>
           </div>
-          <datalist id="mailAddressList">
-            ${addressBook.map((contact) => `<option value="${esc(contact.email)}">${esc(contact.name || contact.email)}</option>`).join("")}
-          </datalist>
           <label>Тема</label>
           <input id="mailSubject" type="text" placeholder="Тема письма">
           <label>Текст</label>
           <textarea id="mailText" rows="8" placeholder="Напишите сообщение..."></textarea>
-          <label>Вложения</label>
-          <input id="mailAttachments" type="file" multiple>
+          <div class="mail-attachment-controls">
+            <button id="mailPickAttachmentsBtn" type="button" class="btn-secondary">Вложить файлы</button>
+            <span class="mail-attachment-help">До 10 файлов, до 20 MB суммарно</span>
+          </div>
+          <input id="mailAttachments" type="file" multiple hidden>
           <div id="mailAttachmentList" class="mail-attachment-list"></div>
           <div class="mail-compose-actions">
             <button id="mailSaveDraftBtn" type="button" class="btn-secondary">Сохранить черновик</button>
@@ -2651,6 +2643,7 @@ async function renderMail(user) {
       if (textEl) textEl.value = String(item.text_body || "");
       attachmentPayloads = [];
       if (attachmentsInput) attachmentsInput.value = "";
+      setCcBccVisible(ccRecipients.length > 0 || bccRecipients.length > 0);
       toController.render();
       ccController.render();
       bccController.render();
@@ -2680,9 +2673,20 @@ async function renderMail(user) {
   const toInput = document.getElementById("mailToInput");
   const ccInput = document.getElementById("mailCcInput");
   const bccInput = document.getElementById("mailBccInput");
+  const ccBccWrap = document.getElementById("mailCcBccWrap");
+  const toggleCcBccBtn = document.getElementById("mailToggleCcBcc");
+  const pickAttachmentsBtn = document.getElementById("mailPickAttachmentsBtn");
   const attachmentsInput = document.getElementById("mailAttachments");
   const attachmentList = document.getElementById("mailAttachmentList");
   const draftBtn = document.getElementById("mailSaveDraftBtn");
+
+  function setCcBccVisible(visible) {
+    if (!ccBccWrap) return;
+    ccBccWrap.hidden = !visible;
+    if (toggleCcBccBtn) {
+      toggleCcBccBtn.textContent = visible ? "Скрыть копию / скрытую копию" : "+ Копия / Скрытая копия";
+    }
+  }
 
   function formatAttachmentSize(size) {
     const bytes = Number(size || 0);
@@ -2809,6 +2813,7 @@ async function renderMail(user) {
     if (ccInput) ccInput.value = "";
     if (bccInput) bccInput.value = "";
     if (attachmentsInput) attachmentsInput.value = "";
+    setCcBccVisible(false);
     const subjectEl = document.getElementById("mailSubject");
     const textEl = document.getElementById("mailText");
     if (subjectEl) subjectEl.value = "";
@@ -2845,22 +2850,19 @@ async function renderMail(user) {
     }
   });
 
+  pickAttachmentsBtn?.addEventListener("click", () => {
+    attachmentsInput?.click();
+  });
+
+  toggleCcBccBtn?.addEventListener("click", () => {
+    setCcBccVisible(Boolean(ccBccWrap?.hidden));
+  });
+
   document.getElementById("mailComposeOpen")?.addEventListener("click", () => {
     resetComposer();
     openComposer();
   });
   document.getElementById("mailComposeClose")?.addEventListener("click", closeComposer);
-  document.querySelectorAll(".mail-contact-pick").forEach((node) => {
-    node.addEventListener("click", () => {
-      const email = String(node.dataset.email || "").trim();
-      if (!email) return;
-      if (!composer?.classList.contains("open")) {
-        resetComposer();
-        openComposer();
-      }
-      toController.tryAdd(email);
-    });
-  });
   composer?.addEventListener("click", (event) => {
     if (event.target === composer) closeComposer();
   });
@@ -2957,6 +2959,7 @@ async function renderMail(user) {
   toController.render();
   ccController.render();
   bccController.render();
+  setCcBccVisible(false);
   renderList();
   renderAttachmentList();
 }
